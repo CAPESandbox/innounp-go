@@ -35,7 +35,7 @@ Because the CLI binary has zero C dependencies, **you can cross-compile it for a
 
 Change directory into `innounp-go/` and run the appropriate command:
 
-#### Compilation for macOS (Apple Silicon - M1/M2/M3)
+#### Compilation for macOS (Apple Silicon - M1/M2/M3/M4/M5/...)
 ```bash
 GOOS=darwin GOARCH=arm64 go build -o innounp-go main.go cgo_exports.go
 ```
