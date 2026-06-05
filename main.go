@@ -87,15 +87,25 @@ func main() {
 	fmt.Printf("Offset1 (SETUP-1.bin): %d (0x%X)\n", table.Offset1, table.Offset1)
 	fmt.Println("================================================================================")
 
+	// Read and print raw signature
+	if fTest, err := os.Open(filePath); err == nil {
+		fTest.Seek(table.Offset0, 0)
+		sigBytes := make([]byte, 64)
+		fTest.Read(sigBytes)
+		fmt.Printf("[DEBUG] Raw Signature String: %q\n", string(sigBytes))
+		fTest.Close()
+	}
+
 	// 2. Parse file lists and locations
-	ver, files, locations, crypt64, err := parser.ListFilesAndLocations(filePath)
+	ver, isUnicode, files, locations, crypt64, _, _, err := parser.ListFilesAndLocations(filePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing installer block: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Detected Inno Setup Installer Version: %d (Format: %s)\n", ver, map[bool]string{true: "Unicode", false: "Ansi"}[ver >= 5205])
+	fmt.Printf("Detected Inno Setup Installer Version: %d (Format: %s)\n", ver, map[bool]string{true: "Unicode", false: "Ansi"}[isUnicode])
 	fmt.Printf("Number of File Payloads:               %d\n", len(files))
+	fmt.Printf("Number of Locations:                   %d\n", len(locations))
 	fmt.Println("================================================================================")
 
 	// 3. Coordinate Multi-Threaded Password Recovery (Forensics / Sandbox Cracker)
@@ -145,6 +155,39 @@ func main() {
 		for _, f := range files {
 			fmt.Printf("%-4d  %-12d  %-10t  %-10t  %s\n", f.ID, f.OriginalSize, f.Compressed, f.Encrypted, f.DestName)
 		}
+		
+		// Forensic Check: display unmapped location entries
+		if len(locations) > len(files) {
+			fmt.Println("\n[!] FORENSIC ALERT: Evasion Tactic Detected!")
+			fmt.Printf("    Installer has %d file entries but %d location entries.\n", len(files), len(locations))
+			fmt.Printf("    These unmapped locations typically hold hidden malware payloads!\n\n")
+			fmt.Printf("%-4s  %-12s  %-10s  %-10s  %s\n", "ID", "Size (bytes)", "Compressed", "Encrypted", "Forensic Mock Path")
+			fmt.Println("--------------------------------------------------------------------------------")
+			for i, loc := range locations {
+				// Check if this location is unmapped
+				mapped := false
+				for _, f := range files {
+					if f.ID == i {
+						mapped = true
+						break
+					}
+				}
+				if !mapped {
+					isCompressed := hasFlag(loc.Flags, 7)
+					isEncrypted := hasFlag(loc.Flags, 6)
+					fmt.Printf("\n[DEBUG] Location ID %d Fields Dump:\n", i)
+					fmt.Printf("    FirstSlice:          %d\n", loc.FirstSlice)
+					fmt.Printf("    LastSlice:           %d\n", loc.LastSlice)
+					fmt.Printf("    StartOffset:         %d (0x%X)\n", loc.StartOffset, loc.StartOffset)
+					fmt.Printf("    ChunkSuboffset:      %d (0x%X)\n", loc.ChunkSuboffset, loc.ChunkSuboffset)
+					fmt.Printf("    OriginalSize:        %d (0x%X)\n", loc.OriginalSize, loc.OriginalSize)
+					fmt.Printf("    ChunkCompressedSize: %d (0x%X)\n", loc.ChunkCompressedSize, loc.ChunkCompressedSize)
+					fmt.Printf("    SHA1Sum (hex):       %s\n", hex.EncodeToString(loc.SHA1Sum))
+					fmt.Printf("    Flags (binary):      %b (0x%X)\n\n", loc.Flags, loc.Flags)
+					fmt.Printf("%-4d  %-12d  %-10t  %-10t  %s\n", i, loc.OriginalSize, isCompressed, isEncrypted, fmt.Sprintf("forensics/hidden_payload_%d.bin", i))
+				}
+			}
+		}
 		fmt.Println("================================================================================")
 		return
 	}
@@ -171,11 +214,15 @@ func main() {
 	}
 
 	for _, f := range files {
+		if f.DestName == "" {
+			// Skip dummy/empty sync records
+			continue
+		}
 		cleanDest := cleanInnoPath(f.DestName)
 		destPath := filepath.Join(destDir, cleanDest)
 
-		locIndex := f.ID
-		if locIndex >= len(locations) {
+		locIndex := f.LocationEntry
+		if locIndex < 0 || locIndex >= len(locations) {
 			fmt.Printf("Skipping file ID %d (no mapped location entry)\n", f.ID)
 			failCount++
 			continue
@@ -190,13 +237,13 @@ func main() {
 
 		fmt.Printf("%-25s %-40s ... ", actionPrefix, truncateFilename(f.DestName, 38))
 
-		// Set default compression method
+		// Set default compression method: Inno Setup 5.3.9+ (ver >= 5300) default-uses LZMA2 decompression!
 		method := parser.CompressLZMA
 		if ver >= 5300 {
 			method = parser.CompressLZMA2
 		}
 
-		extractErr := parser.ExtractFile(filePath, table, ver, &loc, destPath, method, pass, crypt64)
+		extractErr := parser.ExtractFile(filePath, table, ver, isUnicode, &loc, destPath, method, pass, crypt64)
 		if extractErr != nil {
 			fmt.Printf("FAILED (%v)\n", extractErr)
 			failCount++
@@ -204,6 +251,41 @@ func main() {
 			fmt.Println("OK")
 			successCount++
 			totalBytesExtracted += f.OriginalSize
+		}
+	}
+
+	// Forensic Recovery Loop: Extract hidden unmapped payload locations directly (Defeating Evasion Tactics)
+	if len(locations) > len(files) {
+		fmt.Printf("\n[!] FORENSIC ACTION: Recovering %d hidden unmapped payload locations...\n", len(locations)-len(files))
+		for i, loc := range locations {
+			mapped := false
+			for _, f := range files {
+				if f.ID == i {
+					mapped = true
+					break
+				}
+			}
+			if !mapped {
+				destPath := filepath.Join(destDir, fmt.Sprintf("forensics/hidden_payload_%d.bin", i))
+				fmt.Printf("Recovering Hidden Payload:   %-40s ... ", truncateFilename(fmt.Sprintf("forensics/hidden_payload_%d.bin", i), 38))
+
+				method := parser.CompressLZMA
+				if ver >= 5300 {
+					method = parser.CompressLZMA2
+				}
+
+				extractErr := parser.ExtractFile(filePath, table, ver, isUnicode, &loc, destPath, method, pass, crypt64)
+				if extractErr != nil {
+					fmt.Printf("FAILED (%v)\n", extractErr)
+					failCount++
+				} else {
+					fmt.Println("OK")
+					successCount++
+					if stat, err := os.Stat(destPath); err == nil {
+						totalBytesExtracted += stat.Size()
+					}
+				}
+			}
 		}
 	}
 
@@ -281,4 +363,9 @@ func truncateFilename(name string, maxLen int) string {
 		return name
 	}
 	return "..." + name[len(name)-maxLen+3:]
+}
+
+// hasFlag checks if a bit flag is set inside a bitset.
+func hasFlag(flags uint32, bit uint) bool {
+	return (flags & (1 << bit)) != 0
 }

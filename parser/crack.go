@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -21,10 +22,13 @@ type PasswordCrackResult struct {
 // from the compiled Pascal Script bytecode (if present), and runs a parallel dictionary attack.
 func CrackPassword(exePath string, wordlist []string) (*PasswordCrackResult, error) {
 	// 1. Retrieve the file schemas and parse counts
-	ver, _, _, crypt64, err := ListFilesAndLocations(exePath)
+	ver, isUnicode, _, _, crypt64, expectedHash, salt, err := ListFilesAndLocations(exePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse installer blocks: %w", err)
 	}
+
+	fmt.Printf("[DEBUG] Cracker Loaded Parameters: ver=%d, expectedHash=%s, salt=%s\n",
+		ver, hex.EncodeToString(expectedHash), hex.EncodeToString(salt))
 
 	// 2. Load the SETUP header for password parameters
 	file, err := osOpen(exePath)
@@ -38,35 +42,43 @@ func CrackPassword(exePath string, wordlist []string) (*PasswordCrackResult, err
 		return nil, err
 	}
 
-	headerSchema, _ := GetRecordSchema(ver, "TSetupHeader")
+	headerSchema, _ := GetRecordSchema(ver, "TSetupHeader", isUnicode)
 	if _, err := file.Seek(table.Offset0+64, ioSeekStart); err != nil {
 		return nil, err
 	}
-	blockHeader, _ := ReadBlockHeader(file, ver)
-	blockReader, _ := NewBlockReader(file, blockHeader, CompressZip)
+	blockHeader, err := ReadBlockHeader(file, ver)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read block header: %w", err)
+	}
+	compMethod := getSetup0CompressionMethod(ver)
+	blockReader, err := NewBlockReader(file, blockHeader, compMethod)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize block reader: %w", err)
+	}
 	defer blockReader.Close()
 
-	parsedHeader, err := ReadRecord(blockReader, headerSchema)
+	parsedHeader, err := ReadRecord(blockReader, headerSchema, isUnicode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SETUP header: %w", err)
 	}
 
-	var isUnicode bool
-	if ver >= 6300 {
-		isUnicode = true
+	// 3. Script String Extraction (Forensic Auto-Cracking)
+	var extractedCandidates []string
+	var compiledCodeBytes []byte
+
+	if isUnicode {
+		if len(parsedHeader.AnsiStrings) >= 4 {
+			compiledCodeBytes = []byte(parsedHeader.AnsiStrings[3])
+		}
 	} else {
-		isUnicode = (ver >= 5205)
+		if len(parsedHeader.AnsiStrings) >= 31 {
+			compiledCodeBytes = []byte(parsedHeader.AnsiStrings[30])
+		}
 	}
 
-	// 3. Script String Extraction (Forensic Auto-Cracking)
-	// CompiledCodeText is historically the 4th ANSI string inside TSetupHeader (index 3)
-	var extractedCandidates []string
-	if len(parsedHeader.AnsiStrings) >= 4 {
-		compiledCodeBytes := []byte(parsedHeader.AnsiStrings[3])
-		if len(compiledCodeBytes) > 0 {
-			extractedCandidates = ExtractPrintableStrings(compiledCodeBytes)
-			fmt.Printf("[*] Extracted %d potential password keys from CompiledCode bytecode.\n", len(extractedCandidates))
-		}
+	if len(compiledCodeBytes) > 0 {
+		extractedCandidates = ExtractPrintableStrings(compiledCodeBytes)
+		fmt.Printf("[*] Extracted %d potential password keys from CompiledCode bytecode.\n", len(extractedCandidates))
 	}
 
 	// Prepend extracted candidates to the wordlist so we check them first
@@ -95,22 +107,12 @@ func CrackPassword(exePath string, wordlist []string) (*PasswordCrackResult, err
 	// Determine encryption parameters
 	if ver < 6400 {
 		// v5 Crypt (MD5 or SHA1 hash blocks)
-		var expectedHash []byte
-		var salt []byte
-		var isSHA1 bool
-
-		if hashField, ok := parsedHeader.Fields["PasswordHash"]; ok {
-			expectedHash = hashField.([]byte)
-		} else {
-			return nil, errors.New("installer does not appear to be password protected")
-		}
-
-		if saltField, ok := parsedHeader.Fields["PasswordSalt"]; ok {
-			salt = saltField.([]byte)
+		if len(expectedHash) == 0 {
+			return nil, errors.New("installer does not appear to be password protected (missing PasswordHash)")
 		}
 
 		// SHA1 digests are 20 bytes; MD5 digests are 16 bytes
-		isSHA1 = len(expectedHash) == 20
+		isSHA1 := len(expectedHash) == 20
 		hashType := "MD5"
 		if isSHA1 {
 			hashType = "SHA-1"

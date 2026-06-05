@@ -61,7 +61,7 @@ func TestReadRecord_Success(t *testing.T) {
 	binary.Write(buf, binary.LittleEndian, uint64(0xABC)) // FieldE (64-bit Bitset)
 
 	// 3. Parse the record
-	record, err := ReadRecord(buf, schema)
+	record, err := ReadRecord(buf, schema, true)
 	if err != nil {
 		t.Fatalf("failed to parse record: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestReadRecord_TruncatedStream_Failure(t *testing.T) {
 	buf := new(bytes.Buffer)
 	buf.Write(encodeUTF16LEBytes("Shorty"))
 
-	_, err := ReadRecord(buf, schema)
+	_, err := ReadRecord(buf, schema, true)
 	if err == nil {
 		t.Error("expected parsing failure due to truncated stream, but got success")
 	}

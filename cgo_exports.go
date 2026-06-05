@@ -94,7 +94,7 @@ func DecompileStandaloneBytes(ptr *C.char, size C.int) *C.char {
 	goBytes := C.GoBytes(unsafe.Pointer(ptr), size)
 
 	// Parse in-memory
-	ifpsFile, err := ifps.ParseIFPS(bytes.NewReader(goBytes))
+	ifpsFile, err := ifps.ParseIFPS(bytes.NewReader(goBytes), false)
 	if err != nil {
 		return nil
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"hash"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,33 +20,16 @@ type DecryptReader struct {
 	cipherCC20 *chacha20.Cipher
 }
 
-func (d *DecryptReader) Read(p []byte) (n int, err error) {
-	n, err = d.underlying.Read(p)
+func (r *DecryptReader) Read(p []byte) (int, error) {
+	n, err := r.underlying.Read(p)
 	if n > 0 {
-		if d.cipherRC4 != nil {
-			d.cipherRC4.XORKeyStream(p[:n], p[:n])
-		} else if d.cipherCC20 != nil {
-			d.cipherCC20.XORKeyStream(p[:n], p[:n])
+		if r.cipherRC4 != nil {
+			r.cipherRC4.XORKeyStream(p[:n], p[:n])
+		} else if r.cipherCC20 != nil {
+			r.cipherCC20.XORKeyStream(p[:n], p[:n])
 		}
 	}
 	return n, err
-}
-
-// UnifiedFileLocationEntry mirrors the parsed properties of a TSetupFileLocationEntry.
-type UnifiedFileLocationEntry struct {
-	FirstSlice          int32
-	LastSlice           int32
-	StartOffset         int32
-	ChunkSuboffset      int64
-	OriginalSize        int64
-	ChunkCompressedSize int64
-	SHA1Sum             []byte
-	Flags               uint32
-}
-
-// Helper to check if a bit flag is set
-func hasFlag(flags uint32, bit uint) bool {
-	return (flags & (1 << bit)) != 0
 }
 
 // ExtractFile extracts and decrypts/decompresses a single file from the Inno Setup executable.
@@ -55,6 +37,7 @@ func ExtractFile(
 	exePath string,
 	table *UnifiedOffsetTable,
 	ver int,
+	isUnicode bool,
 	fl *UnifiedFileLocationEntry,
 	destPath string,
 	compressMethod SetupCompressMethod,
@@ -73,7 +56,7 @@ func ExtractFile(
 		return fmt.Errorf("failed to seek to chunk start offset at %d: %w", absOffset, err)
 	}
 
-	// 2. Read and verify 4-byte chunk ID: 'zlb'#26 (0x1A626C7A)
+	// 2. Read and verify unencrypted 4-byte chunk ID: 'zlb'#26 (0x1A626C7A)
 	var compID uint32
 	if err := binary.Read(file, binary.LittleEndian, &compID); err != nil {
 		return fmt.Errorf("failed to read comp ID: %w", err)
@@ -82,12 +65,10 @@ func ExtractFile(
 		return errors.New("invalid compression ID: source block is corrupted")
 	}
 
-	// 3. Initialize CRC-validated chunk reader
-	chunkReader := NewCRCChunkReader(file, fl.ChunkCompressedSize)
+	var rawReader io.Reader = file
+	var salt []byte
 
-	var decryptReader io.Reader = chunkReader
-
-	// 4. Handle Decryption if the chunk is encrypted
+	// 3. Handle Decryption if the chunk is encrypted (apply decryption starting immediately after the chunk ID)
 	if hasFlag(fl.Flags, 6) { // foChunkEncrypted is bit 6
 		if password == "" {
 			return errors.New("file is encrypted but no password was specified")
@@ -95,16 +76,16 @@ func ExtractFile(
 
 		if ver < 6400 {
 			// v5 decryption uses an 8-byte salt read directly from the stream
-			salt := make([]byte, 8)
-			if _, err := io.ReadFull(chunkReader, salt); err != nil {
+			salt = make([]byte, 8)
+			if _, err := io.ReadFull(file, salt); err != nil {
 				return fmt.Errorf("failed to read encryption salt: %w", err)
 			}
 
-			cipher, err := InitializeRC4Decryptor(password, salt, true, true) // modern v5 uses SHA-1 and Unicode
+			cipher, err := InitializeRC4Decryptor(password, salt, true, isUnicode) // Pass actual isUnicode flag!
 			if err != nil {
 				return fmt.Errorf("failed to initialize RC4 decryptor: %w", err)
 			}
-			decryptReader = &DecryptReader{underlying: chunkReader, cipherRC4: cipher}
+			rawReader = &DecryptReader{underlying: file, cipherRC4: cipher}
 		} else {
 			// v6 decryption uses PBKDF2 derived keys and BaseNonce XOR offsets
 			if is64Encryption == nil {
@@ -118,43 +99,26 @@ func ExtractFile(
 			if err != nil {
 				return fmt.Errorf("failed to initialize ChaCha20 decryptor: %w", err)
 			}
-			decryptReader = &DecryptReader{underlying: chunkReader, cipherCC20: cipher}
+			rawReader = &DecryptReader{underlying: file, cipherCC20: cipher}
 		}
 	}
 
-	// 5. Initialize Decompressor Stream
-	var decompressor io.ReadCloser
-	if hasFlag(fl.Flags, 7) { // foChunkCompressed is bit 7
-		// Create decompressed reader using the decompressor factory we built in Phase 2
-		hdr := &BlockHeader{
-			StoredSize: fl.ChunkCompressedSize,
-			Compressed: true,
-		}
-		if hasFlag(fl.Flags, 6) && ver < 6400 {
-			// If encrypted, the salt (8 bytes) was already consumed, so adjust size
-			hdr.StoredSize -= 8
-		}
-
-		var err error
-		decompressor, err = NewBlockReader(decryptReader, hdr, compressMethod)
-		if err != nil {
-			return fmt.Errorf("failed to initialize decompressor: %w", err)
-		}
-	} else {
-		// Not compressed
-		decompressor = io.NopCloser(decryptReader)
+	// 4. Initialize Decompressor Stream directly over the decrypted rawReader!
+	// Payload files streams are pure continuous compressed streams without block headers or segmented CRCs.
+	decompressor, err := NewDecompressor(rawReader, compressMethod)
+	if err != nil {
+		return fmt.Errorf("failed to initialize decompressor: %w", err)
 	}
 	defer decompressor.Close()
 
-	// 6. Navigate/Discard bytes up to the file's ChunkSuboffset
+	// 6. Skip sub-offset bytes inside chunk to locate current file payload start boundary
 	if fl.ChunkSuboffset > 0 {
-		discarded, err := io.CopyN(io.Discard, decompressor, fl.ChunkSuboffset)
-		if err != nil || discarded != fl.ChunkSuboffset {
-			return fmt.Errorf("failed to seek to chunk suboffset: %w", err)
+		if _, err := io.CopyN(io.Discard, decompressor, fl.ChunkSuboffset); err != nil {
+			return fmt.Errorf("failed to seek to chunk sub-offset %d: %w", fl.ChunkSuboffset, err)
 		}
 	}
 
-	// 7. Reconstruct parent directories on disk
+	// 7. Write decompressed payload to target destination file with Anti-Size-Bomb defensive shield
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
@@ -165,41 +129,59 @@ func ExtractFile(
 	}
 	defer destFile.Close()
 
-	// 8. Extract loop, checksum tracking, and CALL/JMP absolute conversion
+	// Setup Call/JMP instruction de-optimizer filters
+	var bytesWritten uint32 = 0
+	var callOptFilter func([]byte, uint32)
+	if hasFlag(fl.Flags, 4) { // foCallInstructionOptimized is bit 4
+		if ver >= 5309 {
+			callOptFilter = func(b []byte, offset uint32) {
+				TransformCallInstructions5309(b, uint32(fl.ChunkSuboffset)+offset, false)
+			}
+		} else {
+			callOptFilter = func(b []byte, offset uint32) {
+				TransformCallInstructions(b, uint32(fl.ChunkSuboffset)+offset, false)
+			}
+		}
+	}
+
+	var sha256Hash hash.Hash
+	if ver >= 6400 {
+		// SHA256 validation (Inno 6.x+)
+		// (Initialize hashing here if needed downstream)
+	}
+
+	// Use Anti-Size-Bomb Defensive Shield: Capped bytes left to read using the actual physical file size
+	// to prevent artificial OOM/sandbox sandbox crashes (deflating bombs).
+	stat, err := file.Stat()
+	var maxReadableBytes int64 = 0
+	if err == nil {
+		maxReadableBytes = stat.Size() - table.Offset1
+	}
+	if fl.OriginalSize > maxReadableBytes && maxReadableBytes > 0 {
+		return fmt.Errorf("defensive shield: file size %d exceeds physical readable boundary %d", fl.OriginalSize, maxReadableBytes)
+	}
+
+	buf := make([]byte, 64*1024)
 	bytesLeft := fl.OriginalSize
-	buf := make([]byte, 65536)
-	var addrOffset uint32
-
-	// We calculate CRC32 of the uncompressed data for verification
-	crcHash := crc32.NewIEEE()
-	var sha256Hash hash.Hash // SHA-256 for modern blocks if needed
-
 	for bytesLeft > 0 {
-		chunk := int64(len(buf))
-		if bytesLeft < chunk {
-			chunk = bytesLeft
+		toRead := int64(len(buf))
+		if toRead > bytesLeft {
+			toRead = bytesLeft
 		}
 
-		n, err := io.ReadFull(decompressor, buf[:chunk])
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("failed to read decompressed stream: %w", err)
+		n, err := io.ReadFull(decompressor, buf[:toRead])
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+			return fmt.Errorf("failed to read payload bytes: %w", err)
 		}
 		if n == 0 {
 			break
 		}
 
-		// Apply absolute x86/x64 call optimization filter if enabled
-		if hasFlag(fl.Flags, 4) { // foCallInstructionOptimized is bit 4
-			if ver >= 5309 {
-				TransformCallInstructions5309(buf[:n], addrOffset, false)
-			} else {
-				TransformCallInstructions(buf[:n], addrOffset, false)
-			}
-			addrOffset += uint32(n)
+		// Apply instruction de-optimization filters
+		if callOptFilter != nil {
+			callOptFilter(buf[:n], bytesWritten)
 		}
 
-		// Track hashes
-		crcHash.Write(buf[:n])
 		if sha256Hash != nil {
 			sha256Hash.Write(buf[:n])
 		}
@@ -209,20 +191,9 @@ func ExtractFile(
 			return fmt.Errorf("failed to write extracted file bytes: %w", err)
 		}
 
+		bytesWritten += uint32(n)
 		bytesLeft -= int64(n)
 	}
 
-	if bytesLeft > 0 {
-		return errors.New("failed to extract file: truncated stream payload")
-	}
-
 	return nil
-}
-
-// Is64EncryptionData holds PBKDF2 iterations, salt, and base nonce for v6 decryption.
-type Is64EncryptionData struct {
-	PasswordTest  int32
-	KDFSalt       []byte
-	KDFIterations int
-	BaseNonce     []byte
 }

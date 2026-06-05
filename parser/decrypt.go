@@ -48,10 +48,11 @@ func DerivePasswordHashMD5(password string, salt []byte) []byte {
 // Inno Setup discards the first 1000 bytes of the cipher stream for security.
 func InitializeRC4Decryptor(password string, salt []byte, isSHA1 bool, isUnicode bool) (*rc4.Cipher, error) {
 	var key []byte
+	discardSize := 1000
 
 	if isSHA1 {
-		// SHA1 key derivation: SHA1(salt + password)
 		h := sha1.New()
+		// Standard Inno Setup: SHA1(Salt + Password)
 		h.Write(salt)
 		if isUnicode {
 			runes := []rune(password)
@@ -78,8 +79,8 @@ func InitializeRC4Decryptor(password string, salt []byte, isSHA1 bool, isUnicode
 		return nil, err
 	}
 
-	// Discard the first 1000 bytes as required by Inno Setup
-	discard := make([]byte, 1000)
+	// Discard the initial keystream bytes
+	discard := make([]byte, discardSize)
 	cipher.XORKeyStream(discard, discard)
 
 	return cipher, nil
@@ -122,24 +123,29 @@ func InitializeChaCha20Decryptor(key []byte, nonce []byte) (*chacha20.Cipher, er
 // VerifyPassword_v5 verifies password correctness for Inno Setup 5 (SHA1 or MD5-based).
 func VerifyPassword_v5(password string, expectedHash []byte, salt []byte, isSHA1 bool, isUnicode bool) bool {
 	if isSHA1 {
+		// Test standard (isUnicode) first
 		actualHash := DerivePasswordHashSHA1(password, salt, isUnicode)
-		if len(actualHash) != len(expectedHash) {
-			return false
+		if bytesEqual(actualHash, expectedHash) {
+			return true
 		}
-		for i := range actualHash {
-			if actualHash[i] != expectedHash[i] {
-				return false
-			}
+		// Fallback/Dual-check: Test the alternate character-set encoding
+		actualHashAlt := DerivePasswordHashSHA1(password, salt, !isUnicode)
+		if bytesEqual(actualHashAlt, expectedHash) {
+			return true
 		}
-		return true
+		return false
 	}
 
 	actualHash := DerivePasswordHashMD5(password, salt)
-	if len(actualHash) != len(expectedHash) {
+	return bytesEqual(actualHash, expectedHash)
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	for i := range actualHash {
-		if actualHash[i] != expectedHash[i] {
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

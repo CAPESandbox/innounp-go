@@ -8,15 +8,25 @@ import (
 )
 
 // ReadRecord sequentially parses strings and fixed fields based on a RecordSchema.
-func ReadRecord(r io.Reader, schema RecordSchema) (*ParsedRecord, error) {
+// If isUnicode is false (ANSI installer), it dynamically overrides the schema to
+// read all wide strings as standard AnsiStrings on the fly, matching Delphi compiler directives.
+func ReadRecord(r io.Reader, schema RecordSchema, isUnicode bool) (*ParsedRecord, error) {
+	numWideStrings := schema.NumWideStrings
+	numAnsiStrings := schema.NumAnsiStrings
+
+	if !isUnicode {
+		numAnsiStrings = numWideStrings + numAnsiStrings
+		numWideStrings = 0
+	}
+
 	record := &ParsedRecord{
-		WideStrings: make([]string, 0, schema.NumWideStrings),
-		AnsiStrings: make([]string, 0, schema.NumAnsiStrings),
+		WideStrings: make([]string, 0, numWideStrings),
+		AnsiStrings: make([]string, 0, numAnsiStrings),
 		Fields:      make(map[string]interface{}),
 	}
 
 	// 1. Read Wide Strings (UTF-16LE)
-	for i := 0; i < schema.NumWideStrings; i++ {
+	for i := 0; i < numWideStrings; i++ {
 		var strLen uint32
 		if err := binary.Read(r, binary.LittleEndian, &strLen); err != nil {
 			return nil, fmt.Errorf("failed to read WideString %d length: %w", i, err)
@@ -34,7 +44,7 @@ func ReadRecord(r io.Reader, schema RecordSchema) (*ParsedRecord, error) {
 	}
 
 	// 2. Read Ansi Strings (ASCII / Windows-1252 fallback)
-	for i := 0; i < schema.NumAnsiStrings; i++ {
+	for i := 0; i < numAnsiStrings; i++ {
 		var strLen uint32
 		if err := binary.Read(r, binary.LittleEndian, &strLen); err != nil {
 			return nil, fmt.Errorf("failed to read AnsiString %d length: %w", i, err)
@@ -76,6 +86,28 @@ func ReadRecord(r io.Reader, schema RecordSchema) (*ParsedRecord, error) {
 					return nil, fmt.Errorf("failed to read 64-bit field %s (Bitset): %w", field.Name, err)
 				}
 				record.Fields[field.Name] = val
+			} else if field.Size == 6 {
+				// Read exactly 6 bytes for a 48-bit set and pad to uint64
+				buf := make([]byte, 6)
+				if _, err := io.ReadFull(r, buf); err != nil {
+					return nil, fmt.Errorf("failed to read 48-bit field %s (Bitset): %w", field.Name, err)
+				}
+				// Pad with 2 trailing zero bytes to make 8 bytes (little-endian)
+				paddedBuf := []byte{buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], 0, 0}
+				val := binary.LittleEndian.Uint64(paddedBuf)
+				record.Fields[field.Name] = val
+			} else if field.Size == 2 {
+				var val uint16
+				if err := binary.Read(r, binary.LittleEndian, &val); err != nil {
+					return nil, fmt.Errorf("failed to read 16-bit field %s (Bitset): %w", field.Name, err)
+				}
+				record.Fields[field.Name] = uint32(val)
+			} else if field.Size == 1 {
+				var val uint8
+				if err := binary.Read(r, binary.LittleEndian, &val); err != nil {
+					return nil, fmt.Errorf("failed to read 8-bit field %s (Bitset): %w", field.Name, err)
+				}
+				record.Fields[field.Name] = uint32(val)
 			} else {
 				var val uint32
 				if err := binary.Read(r, binary.LittleEndian, &val); err != nil {

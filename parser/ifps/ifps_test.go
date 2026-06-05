@@ -18,7 +18,7 @@ func TestParseIFPS_EmptyHeaders(t *testing.T) {
 	binary.Write(buf, binary.LittleEndian, uint32(100)) // EntryPoint
 	binary.Write(buf, binary.LittleEndian, uint32(0))  // ImportSize
 
-	file, err := ParseIFPS(buf)
+	file, err := ParseIFPS(bytes.NewReader(buf.Bytes()), false)
 	if err != nil {
 		t.Fatalf("expected successful ParseIFPS, got error: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestParseIFPS_EmptyHeaders(t *testing.T) {
 
 func TestParseIFPS_InvalidMagic(t *testing.T) {
 	buf := bytes.NewReader([]byte("MZ\x90\x00\x03\x00\x00\x00"))
-	_, err := ParseIFPS(buf)
+	_, err := ParseIFPS(buf, false)
 	if err == nil {
 		t.Error("expected ParseIFPS to fail due to invalid magic, but got success")
 	}
@@ -65,7 +65,7 @@ func TestDisassemble_FormatValidation(t *testing.T) {
 				Name:       "RegQueryStringValue",
 				ImportName: "advapi32.dll",
 				Signature: IFPSProcSignature{
-					Convention: CcStdcall,
+					Convention: StdcallCalling,
 					ReturnType: 0,
 					Params:     []IFPSParam{{Type: 0, Mode: 0}},
 				},
@@ -75,7 +75,7 @@ func TestDisassemble_FormatValidation(t *testing.T) {
 				IsExternal: false,
 				Name:       "InitializeSetup",
 				Signature: IFPSProcSignature{
-					Convention: CcPascal,
+					Convention: PascalCalling,
 					ReturnType: 0,
 				},
 				Bytecode: []byte{

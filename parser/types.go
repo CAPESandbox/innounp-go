@@ -2,6 +2,9 @@ package parser
 
 import (
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
 )
 
 // Constants defining loader offsets and signatures.
@@ -88,3 +91,99 @@ type SetupLdrOffsetTableLegacy struct {
 	Offset1             uint32
 }
 
+// FileMetadata represents extracted details about an installer payload file.
+type FileMetadata struct {
+	ID             int    `json:"id"`
+	SourceFilename string `json:"source_filename"`
+	DestName       string `json:"dest_name"`
+	OriginalSize   int64  `json:"original_size"`
+	Compressed     bool   `json:"compressed"`
+	Encrypted      bool   `json:"encrypted"`
+	LocationEntry  int    `json:"location_entry"` // Mapped location entry index!
+}
+
+// Is64EncryptionData holds PBKDF2 iterations, salt, and base nonce for modern v6 decryption.
+type Is64EncryptionData struct {
+	PasswordTest  int32
+	KDFSalt       []byte
+	KDFIterations int
+	BaseNonce     []byte
+}
+
+// UnifiedFileLocationEntry holds metadata about a payload stream slice.
+type UnifiedFileLocationEntry struct {
+	FirstSlice          int32
+	LastSlice           int32
+	StartOffset         int32
+	ChunkSuboffset      int64
+	OriginalSize        int64
+	ChunkCompressedSize int64
+	SHA1Sum             []byte
+	Flags               uint32
+}
+
+// hasFlag checks if a specific bit flag is set inside a bitset integer.
+func hasFlag(flags uint32, bit uint) bool {
+	return (flags & (1 << bit)) != 0
+}
+
+// DetectVersionFromSetup0 reads the 64-byte signature string at offset0 and extracts:
+// 1. The parsed Inno Setup version integer (e.g. 5.5.0 -> 5500, 5.3.6 -> 5306).
+// 2. A boolean indicating if the installer is Unicode (true) or ANSI (false).
+func DetectVersionFromSetup0(r io.ReadSeeker, offset0 int64) (int, bool, error) {
+	if _, err := r.Seek(offset0, io.SeekStart); err != nil {
+		return 0, false, fmt.Errorf("failed to seek to signature offset %d: %w", offset0, err)
+	}
+
+	sigBytes := make([]byte, 64)
+	if _, err := io.ReadFull(r, sigBytes); err != nil {
+		return 0, false, fmt.Errorf("failed to read signature block: %w", err)
+	}
+
+	sig := string(sigBytes)
+	// Typical formats:
+	// "Inno Setup Setup Data (5.5.0)" -> ANSI (isUnicode = false)
+	// "Inno Setup Setup Data (5.5.0) (u)" -> Unicode (isUnicode = true)
+	prefix := "Inno Setup Setup Data ("
+	if len(sig) < len(prefix) {
+		return 0, false, errors.New("invalid signature block: too short")
+	}
+
+	// Verify prefix
+	for i := 0; i < len(prefix); i++ {
+		if sig[i] != prefix[i] {
+			return 0, false, fmt.Errorf("invalid setup signature magic: %q", sig[:22])
+		}
+	}
+
+	// Find the closing paren of the version
+	verStr := ""
+	endIdx := -1
+	for i := len(prefix); i < len(sig); i++ {
+		if sig[i] == ')' {
+			verStr = sig[len(prefix):i]
+			endIdx = i
+			break
+		}
+	}
+
+	if verStr == "" || endIdx == -1 {
+		return 0, false, errors.New("failed to parse version from setup signature")
+	}
+
+	// Determine if Unicode (has " (u" after version paren)
+	isUnicode := false
+	if endIdx+4 <= len(sig) && sig[endIdx:endIdx+4] == ") (u" {
+		isUnicode = true
+	}
+
+	// Parse version string (e.g. "5.5.0" -> 5500, "5.3.6" -> 5306)
+	var major, minor, rev int
+	n, _ := fmt.Sscanf(verStr, "%d.%d.%d", &major, &minor, &rev)
+	if n < 2 {
+		return 0, false, fmt.Errorf("failed to decode version string: %q", verStr)
+	}
+
+	ver := major*1000 + minor*100 + rev
+	return ver, isUnicode, nil
+}

@@ -54,7 +54,7 @@ func createMockProtectedInnoExe(t *testing.T, password string) string {
 	// 4. Seek to SETUP.0 (1000) and write Signature String (64 bytes)
 	tmpFile.Seek(1000, io.SeekStart)
 	sigBytes := make([]byte, 64)
-	copy(sigBytes, []byte("Inno Setup Setup Data (5.5.0) (u)"))
+	copy(sigBytes, []byte("Inno Setup Setup Data (5.9.9) (u)"))
 	tmpFile.Write(sigBytes)
 
 	// 5. Serialize TSetupHeader Record Bytes with dynamic password checks
@@ -102,7 +102,7 @@ func createMockProtectedInnoExe(t *testing.T, password string) string {
 	headerRecord.Fields["DisableDirPage"] = uint8(0)
 	headerRecord.Fields["DisableProgramGroupPage"] = uint8(0)
 	headerRecord.Fields["UninstallDisplaySize"] = int64(0)
-	headerRecord.Fields["Options"] = uint64(0)
+	headerRecord.Fields["Options"] = uint32(0)
 
 	// Serialize record into a zlib block
 	var zlibBuf bytes.Buffer
@@ -116,7 +116,7 @@ func createMockProtectedInnoExe(t *testing.T, password string) string {
 	for i := 0; i < 4; i++ {
 		binary.Write(zw, binary.LittleEndian, uint32(0))
 	}
-	// Fixed Fields (write according to SchemaRegistry[5500]["TSetupHeader"])
+	// Fixed Fields (write according to SchemaRegistry[9999]["TSetupHeader"] which falls back to 5500)
 	schema := SchemaRegistry[5500]["TSetupHeader"]
 	for _, field := range schema.FixedFields {
 		val := headerRecord.Fields[field.Name]

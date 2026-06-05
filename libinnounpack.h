@@ -92,6 +92,7 @@ extern char* ListInnoFiles(char* filePath);
 extern char* CrackInnoPassword(char* filePath, char* wordlistJson);
 extern char* DecompileInnoScript(char* filePath);
 extern char* DecompileStandaloneScript(char* filePath);
+extern char* DecompileStandaloneBytes(char* ptr, int size);
 extern void FreeString(char* ptr);
 
 #ifdef __cplusplus
