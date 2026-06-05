@@ -190,7 +190,7 @@ func ListFilesAndLocations(exePath string) (int, []FileMetadata, []UnifiedFileLo
 			destName = rec.WideStrings[1]
 		}
 
-		locationEntry := rec.Fields["LocationEntry"].(int32)
+		locationEntry := int32(rec.Fields["LocationEntry"].(uint32))
 		externalSize := rec.Fields["ExternalSize"].(int64)
 
 		filesMetadata = append(filesMetadata, FileMetadata{
@@ -215,9 +215,9 @@ func ListFilesAndLocations(exePath string) (int, []FileMetadata, []UnifiedFileLo
 			return 0, nil, nil, nil, fmt.Errorf("failed to read file location %d: %w", i, err)
 		}
 
-		firstSlice := rec.Fields["FirstSlice"].(int32)
-		lastSlice := rec.Fields["LastSlice"].(int32)
-		startOffset := rec.Fields["StartOffset"].(int32)
+		firstSlice := int32(rec.Fields["FirstSlice"].(uint32))
+		lastSlice := int32(rec.Fields["LastSlice"].(uint32))
+		startOffset := int32(rec.Fields["StartOffset"].(uint32))
 		chunkSuboffset := rec.Fields["ChunkSuboffset"].(int64)
 		originalSize := rec.Fields["OriginalSize"].(int64)
 		chunkCompressedSize := rec.Fields["ChunkCompressedSize"].(int64)
