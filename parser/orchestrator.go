@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -395,6 +396,11 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				filesMetadata[i].OriginalSize = loc.OriginalSize
 				filesMetadata[i].Compressed = hasFlag(loc.Flags, 7) // foChunkCompressed is bit 7
 				filesMetadata[i].Encrypted = hasFlag(loc.Flags, 6)  // foChunkEncrypted is bit 6
+				if len(loc.SHA1Sum) > 0 {
+					filesMetadata[i].ExpectedHash = hex.EncodeToString(loc.SHA1Sum)
+				} else {
+					filesMetadata[i].ExpectedHash = ""
+				}
 			}
 		}
 

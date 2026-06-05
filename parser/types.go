@@ -100,6 +100,7 @@ type FileMetadata struct {
 	Compressed     bool   `json:"compressed"`
 	Encrypted      bool   `json:"encrypted"`
 	LocationEntry  int    `json:"location_entry"` // Mapped location entry index!
+	ExpectedHash   string `json:"expected_hash"`   // Hex-encoded SHA1/SHA256 hash from catalog database!
 }
 
 // Is64EncryptionData holds PBKDF2 iterations, salt, and base nonce for modern v6 decryption.

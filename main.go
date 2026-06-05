@@ -156,10 +156,14 @@ func main() {
 
 	if *listOnly {
 		// --- List-Only Mode ---
-		fmt.Printf("%-4s  %-12s  %-10s  %-10s  %s\n", "ID", "Size (bytes)", "Compressed", "Encrypted", "Destination Path")
-		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Printf("%-4s  %-12s  %-64s  %s\n", "ID", "Size (bytes)", "SHA1/SHA256 Hash (Metadata Catalog)", "Destination Path")
+		fmt.Println("--------------------------------------------------------------------------------------------------------------------------------")
 		for _, f := range files {
-			fmt.Printf("%-4d  %-12d  %-10t  %-10t  %s\n", f.ID, f.OriginalSize, f.Compressed, f.Encrypted, f.DestName)
+			hashStr := f.ExpectedHash
+			if hashStr == "" {
+				hashStr = "--------------------------------"
+			}
+			fmt.Printf("%-4d  %-12d  %-64s  %s\n", f.ID, f.OriginalSize, hashStr, f.DestName)
 		}
 		
 		// Forensic Check: display unmapped location entries
