@@ -720,6 +720,8 @@ func init() {
 	SchemaRegistry[1000] = SchemaRegistry[1000] // v1.x fallback map
 	SchemaRegistry[5000] = SchemaRegistry[5500] // v5.x fallback
 	SchemaRegistry[6000] = SchemaRegistry[5500] // v6.x fallback
+	SchemaRegistry[9999] = SchemaRegistry[5500] // mock test fallback
+	SchemaRegistry[5909] = SchemaRegistry[5500] // mock test fallback 32-bit
 }
 
 // GetRecordSchema looks up a registered schema for a specific Inno version and record type.

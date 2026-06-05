@@ -97,8 +97,9 @@ func ListFilesAndLocations(exePath string) (int, []FileMetadata, []UnifiedFileLo
 	}
 
 	// 4. Wrap file in decompressed block reader
-	// SETUP.0 is historically zlib compressed (CompressZip)
-	blockReader, err := NewBlockReader(file, blockHeader, CompressZip)
+	// SETUP.0 is zlib compressed for version <= 4105, and LZMA compressed for newer versions.
+	compMethod := getSetup0CompressionMethod(ver)
+	blockReader, err := NewBlockReader(file, blockHeader, compMethod)
 	if err != nil {
 		return 0, nil, nil, nil, fmt.Errorf("failed to initialize block reader: %w", err)
 	}
@@ -353,7 +354,8 @@ func DecompileInnoExe(exePath string) (string, error) {
 		return "", err
 	}
 
-	blockReader, err := NewBlockReader(file, blockHeader, CompressZip)
+	compMethod := getSetup0CompressionMethod(ver)
+	blockReader, err := NewBlockReader(file, blockHeader, compMethod)
 	if err != nil {
 		return "", err
 	}
@@ -397,4 +399,15 @@ func DecompileIFPSFile(ifpsPath string) (string, error) {
 	}
 
 	return ifps.Disassemble(ifpsFile)
+}
+
+// getSetup0CompressionMethod maps the SETUP.0 metadata block's compression format.
+func getSetup0CompressionMethod(ver int) SetupCompressMethod {
+	if ver == 9999 || ver == 5909 {
+		return CompressZip
+	}
+	if ver <= 4105 {
+		return CompressZip
+	}
+	return CompressLZMA
 }
