@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"debug/pe"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -36,6 +37,9 @@ func init() {
 
 // ParseSetupLdr opens an Inno Setup EXE, parses its PE headers to locate the
 // SetupLdrOffsetTable, and extracts verified offset information.
+// It features an automatic dual-path fallback:
+// 1. Tries to read the ExeHeader directly from the DOS stub at offset 0x30.
+// 2. If missing, it traverses the PE .rsrc tree to extract resource 11111.
 func ParseSetupLdr(filePath string) (*UnifiedOffsetTable, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -43,38 +47,203 @@ func ParseSetupLdr(filePath string) (*UnifiedOffsetTable, error) {
 	}
 	defer file.Close()
 
-	// 1. Read SetupLdrExeHeader at offset 0x30
+	// --- Path 1: Try DOS Stub ExeHeader at offset 0x30 ---
+	table, err := tryParseDOSStubHeader(file)
+	if err == nil {
+		return table, nil
+	}
+
+	// --- Path 2: Fallback to PE Resource 11111 Parser (Standard for modern installers) ---
+	table, err = tryParsePEResources(filePath)
+	if err == nil {
+		return table, nil
+	}
+
+	return nil, fmt.Errorf("invalid Inno Setup installer executable (failed both DOS-stub 0x30 and PE resource 11111 scans): %w", err)
+}
+
+func tryParseDOSStubHeader(file *os.File) (*UnifiedOffsetTable, error) {
 	if _, err := file.Seek(SetupLdrExeHeaderOffset, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("failed to seek to ExeHeader: %w", err)
+		return nil, err
 	}
 
 	var exeHeader SetupLdrExeHeader
 	if err := binary.Read(file, binary.LittleEndian, &exeHeader); err != nil {
-		return nil, fmt.Errorf("failed to read ExeHeader: %w", err)
+		return nil, err
 	}
 
-	// 2. Validate ExeHeader
 	if exeHeader.ID != SetupLdrExeHeaderID {
-		return nil, errors.New("invalid installer executable: missing Inno magic ID")
+		return nil, errors.New("missing Inno magic ID at offset 0x30")
 	}
 	if exeHeader.OffsetTableOffset != ^exeHeader.NotOffsetTableOffset {
-		return nil, errors.New("invalid installer executable: offset table corruption check failed")
+		return nil, errors.New("offset table corruption check failed at offset 0x30")
 	}
 
-	// 3. Seek to OffsetTableOffset and inspect table ID
 	offset := int64(exeHeader.OffsetTableOffset)
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("failed to seek to offset table at %d: %w", offset, err)
+		return nil, err
 	}
 
-	// Read maximum potential offset table size (64 bytes for SetupLdrOffsetTable64)
 	rawTable := make([]byte, 64)
 	n, err := io.ReadFull(file, rawTable)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, fmt.Errorf("failed to read offset table: %w", err)
+		return nil, err
 	}
 	if n < 44 {
-		return nil, fmt.Errorf("failed to read offset table: file truncated (read %d bytes)", n)
+		return nil, fmt.Errorf("file truncated when reading offset table (read %d bytes)", n)
+	}
+
+	return parseRawOffsetTable(rawTable)
+}
+
+func tryParsePEResources(filePath string) (*UnifiedOffsetTable, error) {
+	peFile, err := pe.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse PE executable structure: %w", err)
+	}
+	defer peFile.Close()
+
+	// 1. Locate the .rsrc section
+	var rsrcSec *pe.Section
+	for _, sec := range peFile.Sections {
+		if sec.Name == ".rsrc" {
+			rsrcSec = sec
+			break
+		}
+	}
+	if rsrcSec == nil {
+		return nil, errors.New("PE binary does not contain a .rsrc section")
+	}
+
+	// 2. Read raw bytes of the .rsrc section
+	rsrcBytes, err := rsrcSec.Data()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read .rsrc section bytes: %w", err)
+	}
+
+	// 3. Traverse Resource Directory Tree to find Type 10 (RT_RCDATA), Name 11111 (SetupLdrOffsetTableResID)
+	// Level 1: Types Directory Table (at offset 0)
+	typeDirOffset, found := findResourceEntry(rsrcBytes, 0, 10, true)
+	if !found {
+		return nil, errors.New("missing Type 10 (RT_RCDATA) in .rsrc tree")
+	}
+
+	// Level 2: Names Directory Table
+	nameDirOffset, found := findResourceEntry(rsrcBytes, typeDirOffset, 11111, true)
+	if !found {
+		return nil, errors.New("missing resource ID 11111 in Type 10 .rsrc sub-tree")
+	}
+
+	// Level 3: Languages Directory Table (Follow first default language leaf)
+	langLeafOffset, found := findResourceFirstLanguageLeaf(rsrcBytes, nameDirOffset)
+	if !found {
+		return nil, errors.New("missing language leaf in resource 11111 sub-tree")
+	}
+
+	// Read Resource Data Entry
+	if len(rsrcBytes) < int(langLeafOffset+16) {
+		return nil, errors.New("resource tree data entry is truncated")
+	}
+	dataRVA := binary.LittleEndian.Uint32(rsrcBytes[langLeafOffset : langLeafOffset+4])
+	size := binary.LittleEndian.Uint32(rsrcBytes[langLeafOffset+4 : langLeafOffset+8])
+
+	// Translate DataRVA to raw file offset
+	fileOffset := uint32(0)
+	for _, sec := range peFile.Sections {
+		if dataRVA >= sec.VirtualAddress && dataRVA < sec.VirtualAddress+sec.Size {
+			fileOffset = sec.Offset + (dataRVA - sec.VirtualAddress)
+			break
+		}
+	}
+	if fileOffset == 0 {
+		return nil, fmt.Errorf("failed to map resource RVA 0x%X to file offset", dataRVA)
+	}
+
+	// 4. Read the offset table bytes directly from file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	if _, err := file.Seek(int64(fileOffset), io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to seek to resource payload at %d: %w", fileOffset, err)
+	}
+
+	rawTable := make([]byte, size)
+	if _, err := io.ReadFull(file, rawTable); err != nil {
+		return nil, fmt.Errorf("failed to read resource payload bytes: %w", err)
+	}
+
+	return parseRawOffsetTable(rawTable)
+}
+
+// findResourceEntry traverses a resource directory table and searches for a specific ID entry.
+// Returns the nested offset and true if found.
+func findResourceEntry(rsrcBytes []byte, offset uint32, targetID uint32, expectDir bool) (uint32, bool) {
+	if len(rsrcBytes) < int(offset+16) {
+		return 0, false
+	}
+
+	numNamed := binary.LittleEndian.Uint16(rsrcBytes[offset+12 : offset+14])
+	numID := binary.LittleEndian.Uint16(rsrcBytes[offset+14 : offset+16])
+	totalEntries := int(numNamed + numID)
+
+	entriesStart := offset + 16
+	if len(rsrcBytes) < int(entriesStart+uint32(totalEntries)*8) {
+		return 0, false
+	}
+
+	for i := 0; i < totalEntries; i++ {
+		entryOffset := entriesStart + uint32(i)*8
+		nameOrID := binary.LittleEndian.Uint32(rsrcBytes[entryOffset : entryOffset+4])
+		offsetToData := binary.LittleEndian.Uint32(rsrcBytes[entryOffset+4 : entryOffset+8])
+
+		// High bit of nameOrID specifies named vs ID resource (0 = ID)
+		isID := (nameOrID & 0x80000000) == 0
+
+		if isID && nameOrID == targetID {
+			// High bit of offsetToData specifies subdirectory vs data entry (1 = subdirectory)
+			isDir := (offsetToData & 0x80000000) != 0
+			nextOffset := offsetToData & 0x7FFFFFFF
+
+			if expectDir == isDir {
+				return nextOffset, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+// findResourceFirstLanguageLeaf follows the first language entry in a table, returning the leaf's data entry offset.
+func findResourceFirstLanguageLeaf(rsrcBytes []byte, offset uint32) (uint32, bool) {
+	if len(rsrcBytes) < int(offset+16) {
+		return 0, false
+	}
+
+	numNamed := binary.LittleEndian.Uint16(rsrcBytes[offset+12 : offset+14])
+	numID := binary.LittleEndian.Uint16(rsrcBytes[offset+14 : offset+16])
+	if numNamed+numID == 0 {
+		return 0, false
+	}
+
+	// Grab the very first entry (which usually corresponds to the default language)
+	entryOffset := offset + 16
+	offsetToData := binary.LittleEndian.Uint32(rsrcBytes[entryOffset+4 : entryOffset+8])
+
+	// For a language leaf, offsetToData must point to a terminal leaf (high bit 0)
+	isDir := (offsetToData & 0x80000000) != 0
+	if isDir {
+		return 0, false
+	}
+
+	return offsetToData, true
+}
+
+func parseRawOffsetTable(rawTable []byte) (*UnifiedOffsetTable, error) {
+	if len(rawTable) < 12 {
+		return nil, errors.New("offset table is truncated")
 	}
 
 	tableID := rawTable[:12]
@@ -88,9 +257,8 @@ func ParseSetupLdr(filePath string) (*UnifiedOffsetTable, error) {
 		return nil, fmt.Errorf("unknown or unsupported offset table signature: %s", hex.EncodeToString(tableID))
 	}
 
-	// 4. Decode Table and verify CRC
+	// Decode Table and verify CRC
 	if isLegacy {
-		// Legacy tables do not have CRC32. They are 32-bit only.
 		return decodeLegacyTable(rawTable)
 	}
 
@@ -126,7 +294,6 @@ func decodeModernTable(raw []byte) (*UnifiedOffsetTable, error) {
 	actualCRC_32bit := crc32.ChecksumIEEE(raw[:40])
 
 	if actualCRC_32bit == crc32_32bitExpected {
-		// Valid 32-bit table!
 		var tbl32 SetupLdrOffsetTable32
 		r := bytes.NewReader(raw[:44])
 		if err := binary.Read(r, binary.LittleEndian, &tbl32); err != nil {
@@ -151,7 +318,6 @@ func decodeModernTable(raw []byte) (*UnifiedOffsetTable, error) {
 	actualCRC_64bit := crc32.ChecksumIEEE(raw[:60])
 
 	if actualCRC_64bit == crc32_64bitExpected {
-		// Valid 64-bit table!
 		var tbl64 SetupLdrOffsetTable64
 		r := bytes.NewReader(raw[:64])
 		if err := binary.Read(r, binary.LittleEndian, &tbl64); err != nil {
