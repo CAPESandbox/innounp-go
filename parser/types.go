@@ -185,5 +185,12 @@ func DetectVersionFromSetup0(r io.ReadSeeker, offset0 int64) (int, bool, error) 
 	}
 
 	ver := major*1000 + minor*100 + rev
+
+	// Inno Setup 6.0.0+ discontinued the ANSI edition, meaning all installers
+	// of version 6.x (ver >= 6000) are strictly and globally Unicode!
+	if ver >= 6000 {
+		isUnicode = true
+	}
+
 	return ver, isUnicode, nil
 }

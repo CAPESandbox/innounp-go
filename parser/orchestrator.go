@@ -340,7 +340,15 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			chunkSuboffset := rec.Fields["ChunkSuboffset"].(int64)
 			originalSize := rec.Fields["OriginalSize"].(int64)
 			chunkCompressedSize := rec.Fields["ChunkCompressedSize"].(int64)
-			sha1Sum := rec.Fields["SHA1Sum"].([]byte)
+			
+			// Safely support either SHA1Sum or SHA256Sum based on compiler version
+			var sha1Sum []byte
+			if hVal, exists := rec.Fields["SHA256Sum"]; exists {
+				sha1Sum = hVal.([]byte)
+			} else if hVal, exists := rec.Fields["SHA1Sum"]; exists {
+				sha1Sum = hVal.([]byte)
+			}
+			
 			flags := rec.Fields["Flags"].(uint32)
 
 			locations = append(locations, UnifiedFileLocationEntry{

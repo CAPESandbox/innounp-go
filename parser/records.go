@@ -86,6 +86,16 @@ func ReadRecord(r io.Reader, schema RecordSchema, isUnicode bool) (*ParsedRecord
 					return nil, fmt.Errorf("failed to read 64-bit field %s (Bitset): %w", field.Name, err)
 				}
 				record.Fields[field.Name] = val
+			} else if field.Size == 7 {
+				// Read exactly 7 bytes for a 56-bit set and pad to uint64
+				buf := make([]byte, 7)
+				if _, err := io.ReadFull(r, buf); err != nil {
+					return nil, fmt.Errorf("failed to read 56-bit field %s (Bitset): %w", field.Name, err)
+				}
+				// Pad with 1 trailing zero byte to make 8 bytes (little-endian)
+				paddedBuf := []byte{buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], 0}
+				val := binary.LittleEndian.Uint64(paddedBuf)
+				record.Fields[field.Name] = val
 			} else if field.Size == 6 {
 				// Read exactly 6 bytes for a 48-bit set and pad to uint64
 				buf := make([]byte, 6)

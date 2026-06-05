@@ -611,6 +611,112 @@ func init() {
 		"TSetupRunEntry":           SchemaRegistry[5300]["TSetupRunEntry"],
 	}
 
+	// Initialize Schema Registry for Inno Setup 6.3.0 (v6300 series)
+	SchemaRegistry[6300] = map[string]RecordSchema{
+		"TSetupHeader": {
+			NumWideStrings: 32,
+			NumAnsiStrings: 4,
+			FixedFields: []FieldSchema{
+				{"NumLanguageEntries", FieldInt32, 4},
+				{"NumCustomMessageEntries", FieldInt32, 4},
+				{"NumPermissionEntries", FieldInt32, 4},
+				{"NumTypeEntries", FieldInt32, 4},
+				{"NumComponentEntries", FieldInt32, 4},
+				{"NumTaskEntries", FieldInt32, 4},
+				{"NumDirEntries", FieldInt32, 4},
+				{"NumFileEntries", FieldInt32, 4},
+				{"NumFileLocationEntries", FieldInt32, 4},
+				{"NumIconEntries", FieldInt32, 4},
+				{"NumIniEntries", FieldInt32, 4},
+				{"NumRegistryEntries", FieldInt32, 4},
+				{"NumInstallDeleteEntries", FieldInt32, 4},
+				{"NumUninstallDeleteEntries", FieldInt32, 4},
+				{"NumRunEntries", FieldInt32, 4},
+				{"NumUninstallRunEntries", FieldInt32, 4},
+				{"MinVersion", FieldBytes, 10},       // TSetupVersionData (10 bytes)
+				{"OnlyBelowVersion", FieldBytes, 10}, // TSetupVersionData (10 bytes)
+				{"BackColor", FieldInt32, 4},
+				{"BackColor2", FieldInt32, 4},
+				{"WizardStyle", FieldEnum, 1},
+				{"WizardSizePercentX", FieldInt32, 4},
+				{"WizardSizePercentY", FieldInt32, 4},
+				{"WizardImageAlphaFormat", FieldEnum, 1},
+				{"PasswordHash", FieldBytes, 20}, // TSHA1Digest (20 bytes)
+				{"PasswordSalt", FieldBytes, 8},   // TSetupSalt (8 bytes)
+				{"ExtraDiskSpaceRequired", FieldInt64, 8},
+				{"SlicesPerDisk", FieldInt32, 4},
+				{"UninstallLogMode", FieldEnum, 1},
+				{"DirExistsWarning", FieldEnum, 1},
+				{"PrivilegesRequired", FieldEnum, 1},
+				{"PrivilegesRequiredOverridesAllowed", FieldBitset, 1},
+				{"ShowLanguageDialog", FieldEnum, 1},
+				{"LanguageDetectionMethod", FieldEnum, 1},
+				{"CompressMethod", FieldEnum, 1},
+				{"DisableDirPage", FieldEnum, 1},
+				{"DisableProgramGroupPage", FieldEnum, 1},
+				{"UninstallDisplaySize", FieldInt64, 8},
+				{"Options", FieldBitset, 7},
+			},
+		},
+		"TSetupLanguageEntry":     SchemaRegistry[5500]["TSetupLanguageEntry"],
+		"TSetupCustomMessageEntry": SchemaRegistry[5500]["TSetupCustomMessageEntry"],
+		"TSetupPermissionEntry":    SchemaRegistry[5500]["TSetupPermissionEntry"],
+		"TSetupTypeEntry":          SchemaRegistry[5500]["TSetupTypeEntry"],
+		"TSetupComponentEntry":     SchemaRegistry[5500]["TSetupComponentEntry"],
+		"TSetupTaskEntry":          SchemaRegistry[5500]["TSetupTaskEntry"],
+		"TSetupDirEntry":           SchemaRegistry[5500]["TSetupDirEntry"],
+		"TSetupFileEntry": {
+			NumWideStrings: 10,
+			NumAnsiStrings: 0,
+			FixedFields: []FieldSchema{
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"LocationEntry", FieldInt32, 4},
+				{"Attribs", FieldInt32, 4},
+				{"ExternalSize", FieldInt64, 8},
+				{"PermissionsEntry", FieldInt16, 2},
+				{"Options", FieldBitset, 4},
+				{"FileType", FieldEnum, 1},
+			},
+		},
+		"TSetupFileLocationEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 0,
+			FixedFields: []FieldSchema{
+				{"FirstSlice", FieldInt32, 4},
+				{"LastSlice", FieldInt32, 4},
+				{"StartOffset", FieldInt32, 4},
+				{"ChunkSuboffset", FieldInt64, 8},
+				{"OriginalSize", FieldInt64, 8},
+				{"ChunkCompressedSize", FieldInt64, 8},
+				{"SHA1Sum", FieldBytes, 20},
+				{"SourceTimeStamp", FieldBytes, 8},
+				{"FileVersionMS", FieldInt32, 4},
+				{"FileVersionLS", FieldInt32, 4},
+				{"Flags", FieldBitset, 2},
+				{"Sign", FieldEnum, 1},
+			},
+		},
+		"TSetupIconEntry": {
+			NumWideStrings: 13,
+			NumAnsiStrings: 0,
+			FixedFields: []FieldSchema{
+				{"AppUserModelToastActivatorCLSID", FieldBytes, 16},
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"IconIndex", FieldInt32, 4},
+				{"ShowCmd", FieldInt32, 4},
+				{"CloseOnExit", FieldEnum, 1},
+				{"HotKey", FieldInt16, 2},
+				{"Options", FieldBitset, 1},
+			},
+		},
+		"TSetupIniEntry":           SchemaRegistry[5500]["TSetupIniEntry"],
+		"TSetupRegistryEntry":      SchemaRegistry[5500]["TSetupRegistryEntry"],
+		"TSetupDeleteEntry":        SchemaRegistry[5500]["TSetupDeleteEntry"],
+		"TSetupRunEntry":           SchemaRegistry[5500]["TSetupRunEntry"],
+	}
+
 	// Initialize Schema Registry for Inno Setup 6.4.0+ (v6400 series with modern cryptography)
 	SchemaRegistry[6400] = map[string]RecordSchema{
 		"TSetupHeader": {
@@ -679,7 +785,7 @@ func init() {
 	// if they are minor increments.
 	SchemaRegistry[1000] = SchemaRegistry[1000] // v1.x fallback map
 	SchemaRegistry[5000] = SchemaRegistry[5100] // v5.x fallback (use 5100 ANSI/Cardinal layout)
-	SchemaRegistry[6000] = SchemaRegistry[5500] // v6.x fallback
+	SchemaRegistry[6000] = SchemaRegistry[6300] // v6.x fallback
 	SchemaRegistry[9999] = SchemaRegistry[5500] // mock test fallback
 	SchemaRegistry[5909] = SchemaRegistry[5500] // mock test fallback 32-bit
 }
