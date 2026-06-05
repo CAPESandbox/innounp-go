@@ -59,7 +59,45 @@ func ParseSetupLdr(filePath string) (*UnifiedOffsetTable, error) {
 		return table, nil
 	}
 
-	return nil, fmt.Errorf("invalid Inno Setup installer executable (failed both DOS-stub 0x30 and PE resource 11111 scans): %w", err)
+	// --- Path 3: Signature-Scanning Fallback (For highly custom-packed or protected loaders) ---
+	table, scanErr := tryParseSignatureScan(filePath)
+	if scanErr == nil {
+		return table, nil
+	}
+
+	return nil, fmt.Errorf("invalid Inno Setup installer executable (failed both DOS-stub 0x30, PE resource 11111, and signature scans): %w", err)
+}
+
+func tryParseSignatureScan(filePath string) (*UnifiedOffsetTable, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. Search SETUP.0 signature: "Inno Setup Setup Data"
+	sig := []byte("Inno Setup Setup Data")
+	offset0 := bytes.Index(data, sig)
+	if offset0 == -1 {
+		return nil, errors.New("setup data signature not found")
+	}
+
+	// 2. Search SETUP-1.bin payload signature: 0x1A626C7A (zlb\x1a)
+	payloadSig := []byte{0x7a, 0x6c, 0x62, 0x1a} // 0x1A626C7A in little-endian
+	offset1 := bytes.Index(data[offset0:], payloadSig)
+	if offset1 == -1 {
+		// Fallback to offset0 if no separate payload signature is found (single compressed block)
+		offset1 = 0
+	} else {
+		offset1 += offset0
+	}
+
+	return &UnifiedOffsetTable{
+		Version:   1,
+		TotalSize: int64(len(data)),
+		Offset0:   int64(offset0),
+		Offset1:   int64(offset1),
+		Is64Bit:   false,
+	}, nil
 }
 
 func tryParseDOSStubHeader(file *os.File) (*UnifiedOffsetTable, error) {

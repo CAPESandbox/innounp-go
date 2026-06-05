@@ -41,17 +41,38 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to read SETUP.0 Block 1 header: %w", err)
 	}
 
-	compMethod := getSetup0CompressionMethod(ver)
-	blockReader1, err := NewBlockReader(file, blockHeader1, compMethod)
-	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize SETUP.0 Block 1 reader: %w", err)
+	// Gracefully detect multi-disk spanned installers whose external setup-1.bin files are missing
+	stat, statErr := file.Stat()
+	if statErr == nil && int64(blockHeader1.StoredSize) > stat.Size() {
+		return 0, false, nil, nil, nil, nil, nil, errors.New("this file is only a small installer launcher (stub). The actual installation files and catalog database are stored in separate files (such as setup-1.bin) which are missing from this folder")
 	}
-	defer blockReader1.Close()
 
-	// Buffer Block 1 fully into memory to enable safe back-seeking retry loops
+	compMethod := getSetup0CompressionMethod(ver)
+	var blockReader1 io.ReadCloser
+	blockReader1, err = NewBlockReader(file, blockHeader1, compMethod)
+	
+	// Self-healing metadata block 1 fallback: if classic LZMA fails, retry with LZMA2!
 	var decompressedBuf1 bytes.Buffer
-	if _, err := io.Copy(&decompressedBuf1, blockReader1); err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to decompress SETUP.0 Block 1: %w", err)
+	if err == nil {
+		_, err = io.Copy(&decompressedBuf1, blockReader1)
+		blockReader1.Close()
+	}
+	if err != nil {
+		// Fallback to LZMA2
+		decompressedBuf1.Reset()
+		if _, seekErr := file.Seek(table.Offset0+64, io.SeekStart); seekErr == nil {
+			if blockHeader1Fallback, hdrErr := ReadBlockHeader(file, ver); hdrErr == nil {
+				if blockReader1Fallback, decErr := NewBlockReader(file, blockHeader1Fallback, CompressLZMA2); decErr == nil {
+					if _, copyErr := io.Copy(&decompressedBuf1, blockReader1Fallback); copyErr == nil {
+						err = nil
+					}
+					blockReader1Fallback.Close()
+				}
+			}
+		}
+	}
+	if err != nil {
+		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to decompress SETUP.0 Block 1 metadata: %w", err)
 	}
 	rawBytes1 := decompressedBuf1.Bytes()
 	r := bytes.NewReader(rawBytes1)
