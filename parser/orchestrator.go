@@ -105,14 +105,14 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 
 		headerSchema, ok := GetRecordSchema(ver, "TSetupHeader", isUnicode)
 		if !ok {
-			fmt.Printf("[DEBUG] Attempt %d: failed to retrieve schema for TSetupHeader\n", attempt)
+			debugPrintf("[DEBUG] Attempt %d: failed to retrieve schema for TSetupHeader\n", attempt)
 			continue
 		}
 
 		var err error
 		parsedHeader, err = ReadRecord(r, headerSchema, isUnicode)
 		if err != nil {
-			fmt.Printf("[DEBUG] Attempt %d: failed to parse SETUP header: %v\n", attempt, err)
+			debugPrintf("[DEBUG] Attempt %d: failed to parse SETUP header: %v\n", attempt, err)
 			continue
 		}
 
@@ -135,7 +135,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				headerSchema, _ = GetRecordSchema(5300, "TSetupHeader", isUnicode)
 				parsedHeader, err = ReadRecord(r, headerSchema, isUnicode)
 				if err != nil {
-					fmt.Printf("[DEBUG] Attempt %d (Self-Healed): failed to re-parse setup header: %v\n", attempt, err)
+					debugPrintf("[DEBUG] Attempt %d (Self-Healed): failed to re-parse setup header: %v\n", attempt, err)
 					continue
 				}
 			}
@@ -188,13 +188,13 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		for _, list := range skipList {
 			schema, ok := GetRecordSchema(ver, list.schema, isUnicode)
 			if !ok {
-				fmt.Printf("[DEBUG] Attempt %d: failed to retrieve schema for %s\n", attempt, list.schema)
+				debugPrintf("[DEBUG] Attempt %d: failed to retrieve schema for %s\n", attempt, list.schema)
 				skipFailed = true
 				break
 			}
 			for i := uint32(0); i < list.count; i++ {
 				if _, err := ReadRecord(r, schema, isUnicode); err != nil {
-					fmt.Printf("[DEBUG] Attempt %d: failed to skip list %s at item %d: %v\n", attempt, list.schema, i, err)
+					debugPrintf("[DEBUG] Attempt %d: failed to skip list %s at item %d: %v\n", attempt, list.schema, i, err)
 					skipFailed = true
 					break
 				}
@@ -210,7 +210,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		// Parse File Entries
 		fileSchema, ok := GetRecordSchema(ver, "TSetupFileEntry", isUnicode)
 		if !ok {
-			fmt.Printf("[DEBUG] Attempt %d: failed to retrieve schema for TSetupFileEntry\n", attempt)
+			debugPrintf("[DEBUG] Attempt %d: failed to retrieve schema for TSetupFileEntry\n", attempt)
 			continue
 		}
 
@@ -221,7 +221,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		for i := uint32(0); i < numFiles; i++ {
 			rec, err := ReadRecord(r, fileSchema, isUnicode)
 			if err != nil {
-				fmt.Printf("[DEBUG] Attempt %d: failed to read file record %d: %v\n", attempt, i, err)
+				debugPrintf("[DEBUG] Attempt %d: failed to read file record %d: %v\n", attempt, i, err)
 				fileFailed = true
 				break
 			}
@@ -273,13 +273,13 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		for _, list := range skipPostList {
 			schema, ok := GetRecordSchema(ver, list.schema, isUnicode)
 			if !ok {
-				fmt.Printf("[DEBUG] Attempt %d: failed to retrieve post-schema for %s\n", attempt, list.schema)
+				debugPrintf("[DEBUG] Attempt %d: failed to retrieve post-schema for %s\n", attempt, list.schema)
 				postFailed = true
 				break
 			}
 			for i := uint32(0); i < list.count; i++ {
 				if _, err := ReadRecord(r, schema, isUnicode); err != nil {
-					fmt.Printf("[DEBUG] Attempt %d: failed to skip post-list %s at item %d: %v\n", attempt, list.schema, i, err)
+					debugPrintf("[DEBUG] Attempt %d: failed to skip post-list %s at item %d: %v\n", attempt, list.schema, i, err)
 					postFailed = true
 					break
 				}
@@ -295,18 +295,18 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		// Skip Wizard Images and Compressor DLL sequential stubs at the end of Block 1
 		if ver >= 4000 {
 			if err := skipImageList(r); err != nil {
-				fmt.Printf("[DEBUG] Attempt %d: failed to skip Wizard Images: %v\n", attempt, err)
+				debugPrintf("[DEBUG] Attempt %d: failed to skip Wizard Images: %v\n", attempt, err)
 				continue
 			}
 			if ver >= 2001 {
 				if err := skipImageList(r); err != nil {
-					fmt.Printf("[DEBUG] Attempt %d: failed to skip Small Wizard Images: %v\n", attempt, err)
+					debugPrintf("[DEBUG] Attempt %d: failed to skip Small Wizard Images: %v\n", attempt, err)
 					continue
 				}
 			}
 			compressMethod := getIntField(parsedHeader.Fields, "CompressMethod")
 			if err := skipDecompDll(r, ver, uint8(compressMethod)); err != nil {
-				fmt.Printf("[DEBUG] Attempt %d: failed to skip Decompressor DLL: %v\n", attempt, err)
+				debugPrintf("[DEBUG] Attempt %d: failed to skip Decompressor DLL: %v\n", attempt, err)
 				continue
 			}
 		}
@@ -341,7 +341,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		// Parse File Location Entries from locReader
 		locSchema, ok := GetRecordSchema(ver, "TSetupFileLocationEntry", isUnicode)
 		if !ok {
-			fmt.Printf("[DEBUG] Attempt %d: failed to retrieve schema for TSetupFileLocationEntry\n", attempt)
+			debugPrintf("[DEBUG] Attempt %d: failed to retrieve schema for TSetupFileLocationEntry\n", attempt)
 			continue
 		}
 
@@ -350,7 +350,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		for i := uint32(0); i < numLocations; i++ {
 			rec, err := ReadRecord(locReader, locSchema, isUnicode)
 			if err != nil {
-				fmt.Printf("[DEBUG] Attempt %d: failed to read file location %d: %v\n", attempt, i, err)
+				debugPrintf("[DEBUG] Attempt %d: failed to read file location %d: %v\n", attempt, i, err)
 				locFailed = true
 				break
 			}
@@ -418,13 +418,13 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	}
 
 	// Print final metadata counts summary
-	fmt.Printf("\n[DEBUG] Parsing Completed Successfully! Extracted Record Counts:\n")
-	fmt.Printf("    Languages:      %d\n", numLanguages)
-	fmt.Printf("    Messages:       %d\n", numMessages)
-	fmt.Printf("    Dirs:           %d\n", numDirs)
-	fmt.Printf("    Files:          %d\n", numFiles)
-	fmt.Printf("    Locations:      %d\n", numLocations)
-	fmt.Printf("    Runs:           %d\n\n", numRuns)
+	debugPrintf("\n[DEBUG] Parsing Completed Successfully! Extracted Record Counts:\n")
+	debugPrintf("    Languages:      %d\n", numLanguages)
+	debugPrintf("    Messages:       %d\n", numMessages)
+	debugPrintf("    Dirs:           %d\n", numDirs)
+	debugPrintf("    Files:          %d\n", numFiles)
+	debugPrintf("    Locations:      %d\n", numLocations)
+	debugPrintf("    Runs:           %d\n\n", numRuns)
 
 	return ver, isUnicode, filesMetadata, locations, crypt64, passwordHash, passwordSalt, nil
 }

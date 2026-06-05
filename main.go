@@ -26,6 +26,7 @@ func main() {
 	crack := flag.Bool("crack", false, "Attempt parallel password recovery using a built-in common list")
 	wordlistFile := flag.String("w", "", "Attempt parallel dictionary attack using passwords from a wordlist file")
 	decompile := flag.Bool("d", false, "Decompile Pascal Script CompiledCode.bin from installer or standalone file")
+	debug := flag.Bool("debug", false, "Enable verbose forensics and parsing debug logs")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <path_to_inno_setup_exe_or_bytecode>\n\nFlags:\n", os.Args[0])
@@ -65,6 +66,9 @@ func main() {
 		return
 	}
 
+	// Set the global debug flag inside the parser package
+	parser.EnableDebugLogging = *debug
+
 	fmt.Printf("Analyzing Inno Setup Executable: %s\n", filePath)
 	fmt.Println("================================================================================")
 
@@ -75,25 +79,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Loader Offset Table verified successfully!\n\n")
-	fmt.Printf("Offset Table Magic ID: %s\n", hex.EncodeToString(table.ID[:]))
-	fmt.Printf("Table Format:          %s\n", map[bool]string{true: "64-bit", false: "32-bit"}[table.Is64Bit])
-	fmt.Printf("Table Version:         %d\n", table.Version)
-	fmt.Printf("Total EXE Size:        %d bytes\n", table.TotalSize)
-	fmt.Printf("Offset EXE Block:      %d (0x%X)\n", table.OffsetEXE, table.OffsetEXE)
-	fmt.Printf("Uncompressed EXE Size: %d bytes\n", table.UncompressedSizeEXE)
-	fmt.Printf("CRC of EXE Block:      0x%X\n", uint32(table.CRCEXE))
-	fmt.Printf("Offset0 (SETUP.0):     %d (0x%X)\n", table.Offset0, table.Offset0)
-	fmt.Printf("Offset1 (SETUP-1.bin): %d (0x%X)\n", table.Offset1, table.Offset1)
-	fmt.Println("================================================================================")
+	if parser.EnableDebugLogging {
+		fmt.Printf("Loader Offset Table verified successfully!\n\n")
+		fmt.Printf("Offset Table Magic ID: %s\n", hex.EncodeToString(table.ID[:]))
+		fmt.Printf("Table Format:          %s\n", map[bool]string{true: "64-bit", false: "32-bit"}[table.Is64Bit])
+		fmt.Printf("Table Version:         %d\n", table.Version)
+		fmt.Printf("Total EXE Size:        %d bytes\n", table.TotalSize)
+		fmt.Printf("Offset EXE Block:      %d (0x%X)\n", table.OffsetEXE, table.OffsetEXE)
+		fmt.Printf("Uncompressed EXE Size: %d bytes\n", table.UncompressedSizeEXE)
+		fmt.Printf("CRC of EXE Block:      0x%X\n", uint32(table.CRCEXE))
+		fmt.Printf("Offset0 (SETUP.0):     %d (0x%X)\n", table.Offset0, table.Offset0)
+		fmt.Printf("Offset1 (SETUP-1.bin): %d (0x%X)\n", table.Offset1, table.Offset1)
+		fmt.Println("================================================================================")
 
-	// Read and print raw signature
-	if fTest, err := os.Open(filePath); err == nil {
-		fTest.Seek(table.Offset0, 0)
-		sigBytes := make([]byte, 64)
-		fTest.Read(sigBytes)
-		fmt.Printf("[DEBUG] Raw Signature String: %q\n", string(sigBytes))
-		fTest.Close()
+		// Read and print raw signature
+		if fTest, err := os.Open(filePath); err == nil {
+			fTest.Seek(table.Offset0, 0)
+			sigBytes := make([]byte, 64)
+			fTest.Read(sigBytes)
+			fmt.Printf("[DEBUG] Raw Signature String: %q\n", string(sigBytes))
+			fTest.Close()
+		}
 	}
 
 	// 2. Parse file lists and locations
@@ -175,15 +181,17 @@ func main() {
 				if !mapped {
 					isCompressed := hasFlag(loc.Flags, 7)
 					isEncrypted := hasFlag(loc.Flags, 6)
-					fmt.Printf("\n[DEBUG] Location ID %d Fields Dump:\n", i)
-					fmt.Printf("    FirstSlice:          %d\n", loc.FirstSlice)
-					fmt.Printf("    LastSlice:           %d\n", loc.LastSlice)
-					fmt.Printf("    StartOffset:         %d (0x%X)\n", loc.StartOffset, loc.StartOffset)
-					fmt.Printf("    ChunkSuboffset:      %d (0x%X)\n", loc.ChunkSuboffset, loc.ChunkSuboffset)
-					fmt.Printf("    OriginalSize:        %d (0x%X)\n", loc.OriginalSize, loc.OriginalSize)
-					fmt.Printf("    ChunkCompressedSize: %d (0x%X)\n", loc.ChunkCompressedSize, loc.ChunkCompressedSize)
-					fmt.Printf("    SHA1Sum (hex):       %s\n", hex.EncodeToString(loc.SHA1Sum))
-					fmt.Printf("    Flags (binary):      %b (0x%X)\n\n", loc.Flags, loc.Flags)
+					if parser.EnableDebugLogging {
+						fmt.Printf("\n[DEBUG] Location ID %d Fields Dump:\n", i)
+						fmt.Printf("    FirstSlice:          %d\n", loc.FirstSlice)
+						fmt.Printf("    LastSlice:           %d\n", loc.LastSlice)
+						fmt.Printf("    StartOffset:         %d (0x%X)\n", loc.StartOffset, loc.StartOffset)
+						fmt.Printf("    ChunkSuboffset:      %d (0x%X)\n", loc.ChunkSuboffset, loc.ChunkSuboffset)
+						fmt.Printf("    OriginalSize:        %d (0x%X)\n", loc.OriginalSize, loc.OriginalSize)
+						fmt.Printf("    ChunkCompressedSize: %d (0x%X)\n", loc.ChunkCompressedSize, loc.ChunkCompressedSize)
+						fmt.Printf("    SHA1Sum (hex):       %s\n", hex.EncodeToString(loc.SHA1Sum))
+						fmt.Printf("    Flags (binary):      %b (0x%X)\n\n", loc.Flags, loc.Flags)
+					}
 					fmt.Printf("%-4d  %-12d  %-10t  %-10t  %s\n", i, loc.OriginalSize, isCompressed, isEncrypted, fmt.Sprintf("forensics/hidden_payload_%d.bin", i))
 				}
 			}

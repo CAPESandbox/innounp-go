@@ -7,6 +7,16 @@ import (
 	"unicode/utf16"
 )
 
+// EnableDebugLogging is a globally accessible flag to toggle debug output.
+var EnableDebugLogging = false
+
+// debugPrintf prints formatting output only if EnableDebugLogging is enabled.
+func debugPrintf(format string, a ...interface{}) {
+	if EnableDebugLogging {
+		fmt.Printf(format, a...)
+	}
+}
+
 // ReadRecord sequentially parses strings and fixed fields based on a RecordSchema.
 // If isUnicode is false (ANSI installer), it dynamically overrides the schema to
 // read all wide strings as standard AnsiStrings on the fly, matching Delphi compiler directives.

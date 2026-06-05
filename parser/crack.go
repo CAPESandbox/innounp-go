@@ -27,8 +27,10 @@ func CrackPassword(exePath string, wordlist []string) (*PasswordCrackResult, err
 		return nil, fmt.Errorf("failed to parse installer blocks: %w", err)
 	}
 
-	fmt.Printf("[DEBUG] Cracker Loaded Parameters: ver=%d, expectedHash=%s, salt=%s\n",
-		ver, hex.EncodeToString(expectedHash), hex.EncodeToString(salt))
+	if EnableDebugLogging {
+		fmt.Printf("[DEBUG] Cracker Loaded Parameters: ver=%d, expectedHash=%s, salt=%s\n",
+			ver, hex.EncodeToString(expectedHash), hex.EncodeToString(salt))
+	}
 
 	// 2. Load the SETUP header for password parameters
 	file, err := osOpen(exePath)
