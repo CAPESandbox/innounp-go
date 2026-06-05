@@ -5,10 +5,12 @@ package main
 */
 import "C"
 import (
+	"bytes"
 	"encoding/json"
 	"unsafe"
 
 	"innounp-go/parser"
+	"innounp-go/parser/ifps"
 )
 
 //export ExtractInno
@@ -60,6 +62,49 @@ func CrackInnoPassword(filePath *C.char, wordlistJson *C.char) *C.char {
 	}
 
 	return C.CString(string(resBytes))
+}
+
+//export DecompileInnoScript
+func DecompileInnoScript(filePath *C.char) *C.char {
+	goFilePath := C.GoString(filePath)
+
+	assembly, err := parser.DecompileInnoExe(goFilePath)
+	if err != nil {
+		return nil
+	}
+
+	return C.CString(assembly)
+}
+
+//export DecompileStandaloneScript
+func DecompileStandaloneScript(filePath *C.char) *C.char {
+	goFilePath := C.GoString(filePath)
+
+	assembly, err := parser.DecompileIFPSFile(goFilePath)
+	if err != nil {
+		return nil
+	}
+
+	return C.CString(assembly)
+}
+
+//export DecompileStandaloneBytes
+func DecompileStandaloneBytes(ptr *C.char, size C.int) *C.char {
+	// Safely convert C-buffer pointer and size into a Go byte slice
+	goBytes := C.GoBytes(unsafe.Pointer(ptr), size)
+
+	// Parse in-memory
+	ifpsFile, err := ifps.ParseIFPS(bytes.NewReader(goBytes))
+	if err != nil {
+		return nil
+	}
+
+	assembly, err := ifps.Disassemble(ifpsFile)
+	if err != nil {
+		return nil
+	}
+
+	return C.CString(assembly)
 }
 
 //export FreeString

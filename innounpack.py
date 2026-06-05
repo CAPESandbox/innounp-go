@@ -50,6 +50,15 @@ try:
     _lib.CrackInnoPassword.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     _lib.CrackInnoPassword.restype = ctypes.c_char_p
 
+    _lib.DecompileInnoScript.argtypes = [ctypes.c_char_p]
+    _lib.DecompileInnoScript.restype = ctypes.c_char_p
+
+    _lib.DecompileStandaloneScript.argtypes = [ctypes.c_char_p]
+    _lib.DecompileStandaloneScript.restype = ctypes.c_char_p
+
+    _lib.DecompileStandaloneBytes.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    _lib.DecompileStandaloneBytes.restype = ctypes.c_char_p
+
     _lib.FreeString.argtypes = [ctypes.c_char_p]
     _lib.FreeString.restype = None
 except Exception as e:
@@ -143,3 +152,61 @@ def crack_password(installer_path: str, wordlist: list = None) -> dict:
         return json.loads(json_str)
     finally:
         _lib.FreeString(c_json_ptr)
+
+def decompile_script(file_or_bytes) -> str:
+    """
+    Decompiles compiled Pascal script bytecode and returns human-readable formatted assembly text.
+    Supports:
+    - String file path (full setup EXE or standalone CompiledCode.bin file)
+    - Raw bytes/bytearray buffer of CompiledCode.bin directly in-memory!
+
+    Args:
+        file_or_bytes (str or bytes): Path to the file, or raw bytes bytecode buffer.
+
+    Returns:
+        str: Disassembly formatted text.
+    """
+    if _lib is None:
+        raise RuntimeError("Shared library is not loaded.")
+
+    # 1. Handle in-memory bytes/bytearray decompilation directly!
+    if isinstance(file_or_bytes, (bytes, bytearray)):
+        c_str_ptr = _lib.DecompileStandaloneBytes(file_or_bytes, len(file_or_bytes))
+        if not c_str_ptr:
+            raise Exception("Decompilation failed: invalid or corrupted bytecode payload buffer")
+        try:
+            return ctypes.c_char_p(c_str_ptr).value.decode('utf-8')
+        finally:
+            _lib.FreeString(c_str_ptr)
+
+    # 2. Handle string file path decompilation
+    file_path = file_or_bytes
+    if not isinstance(file_path, str):
+        raise TypeError("Input must be a file path string or raw bytes/bytearray buffer")
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Target file not found: {file_path}")
+
+    # Detect standalone "IFPS" bytecode file vs setup PE executable
+    is_standalone = False
+    try:
+        with open(file_path, "rb") as f:
+            magic = f.read(4)
+            is_standalone = (magic == b"IFPS")
+    except Exception:
+        pass
+
+    path_bytes = file_path.encode('utf-8')
+
+    if is_standalone:
+        c_str_ptr = _lib.DecompileStandaloneScript(path_bytes)
+    else:
+        c_str_ptr = _lib.DecompileInnoScript(path_bytes)
+
+    if not c_str_ptr:
+        raise Exception("Decompilation failed: file is not a valid CompiledCode payload or does not contain scripting logic")
+
+    try:
+        return ctypes.c_char_p(c_str_ptr).value.decode('utf-8')
+    finally:
+        _lib.FreeString(c_str_ptr)

@@ -19,6 +19,10 @@ This platform supports **nearly three decades of Inno Setup installer structures
         *   `extract.go`: Multi-slice payload extractors and checksum verifiers.
         *   `orchestrator.go`: High-level list and extract loops.
         *   `crack.go`: Concurrent, multi-threaded password recovery and brute-force engine.
+        *   **`ifps/`** - Native Inno Free Pascal Script (IFPS) parser:
+            *   `types.go`: OpCode and TypeCode constant tables.
+            *   `parser.go`: Binary deserializer of `CompiledCode.bin` structures.
+            *   `disasm.go`: Linear sweep bytecode disassembler and assembly formatter.
     *   **`main.go`** - Command-line interface entry point.
     *   **`cgo_exports.go`** - CGo shared library exported entry points.
     *   **`innounpack.py`** - Standard ctypes Python wrapper with recovery defaults.
@@ -88,7 +92,7 @@ go build -buildmode=c-shared -o libinnounpack.dll
 Running the compiled native CLI binary against any Inno Setup installer executable verifies its internal offset tables, performs magic boundary checking, detects the installer version, and displays its block metadata:
 
 ```bash
-./innounp-go [flags] <path_to_installer.exe>
+./innounp-go [flags] <path_to_installer_exe_or_bytecode>
 ```
 
 #### Supported CLI Flags:
@@ -97,6 +101,7 @@ Running the compiled native CLI binary against any Inno Setup installer executab
 *   `-p <password>` - Explicit decryption password.
 *   `-crack` - Initiates a multi-core, parallel dictionary attack using our built-in forensic dictionary of standard malware and installation passwords. **If found, the password is automatically injected to list or extract the files in-place!**
 *   `-w <path_to_wordlist>` - Initiates a concurrent parallel dictionary attack using passwords read line-by-line from a specified wordlist (e.g. `rockyou.txt`). **If found, the password is automatically injected to complete the run.**
+*   `-d` - Native Decompiler Mode: Extracts and disassembles compiled Pascal Script bytecode (`CompiledCode.bin`) in-memory. **Auto-detects format:** accepts both a full setup executable or a raw standalone `.bin` file as the path!
 
 #### Example Output (Password Recovery + Auto-Extraction):
 ```text
@@ -174,6 +179,23 @@ else:
     print("[-] Password was not recovered.")
 ```
 
+#### Native Bytecode Decompilation (In-Process Disassembler)
+`decompile_script` reads and disassembles compiled Pascal Script bytecode. It features an incredibly versatile API, supporting **both** string file paths and raw binary buffers directly in-memory!
+
+```python
+import innounpack
+
+# Example A: Decompile from a full installer exe on disk (in-memory extraction & disasm)
+assembly_from_exe = innounpack.decompile_script("my_installer.exe")
+print(assembly_from_exe)
+
+# Example B: Decompile from a raw, standalone bytecode buffer directly (No disk I/O!)
+# This is perfect for advanced pipelines (like CAPE Sandbox) that load blobs from DBs/streams
+raw_bytecode_bytes = b"IFPS\x17\x00..."  # binary CompiledCode payload
+assembly_from_memory = innounpack.decompile_script(raw_bytecode_bytes)
+print(assembly_from_memory)
+```
+
 #### Extracting Payloads (Explicit Decryption)
 ```python
 import innounpack
@@ -207,6 +229,4 @@ This project is built upon decades of outstanding reverse-engineering and open-s
 
 1.  **Josef Rathlev** (and the contributors of **`innounp`**): For creating the legendary, battle-tested Object Pascal-based Inno Setup Unpacker command-line tool, which served as the foundational layout blueprint and structural reference for this Go implementation.
 2.  **Daniel Scharrer** (author of **`innoextract`**): For his incredible work engineering a clean, cross-platform C++ Inno Setup extractor, which provided invaluable reference structures, and **gdesmar** for his fork focusing on Pascal Script bytecode (`CompiledCode.bin`) string-extraction concepts.
-3.  **Gemini**, and **@doomedraven**: For collaborating hand-in-hand to design, port, implement, and fully verify this modern, schema-driven Go porting initiative from legacy Object Pascal to modern Go, achieving a new milestone in cross-platform forensic utility tooling.
-
-
+3. **Gemini**, and **@doomedraven**: For collaborating hand-in-hand to design, port, implement, and fully verify this modern, schema-driven Go porting initiative from legacy Object Pascal to modern Go, achieving a new milestone in cross-platform forensic utility tooling.

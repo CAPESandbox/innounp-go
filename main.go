@@ -25,9 +25,10 @@ func main() {
 	password := flag.String("p", "", "Explicit decryption password if the installer is encrypted")
 	crack := flag.Bool("crack", false, "Attempt parallel password recovery using a built-in common list")
 	wordlistFile := flag.String("w", "", "Attempt parallel dictionary attack using passwords from a wordlist file")
+	decompile := flag.Bool("d", false, "Decompile Pascal Script CompiledCode.bin from installer or standalone file")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <path_to_inno_setup_exe>\n\nFlags:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <path_to_inno_setup_exe_or_bytecode>\n\nFlags:\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 
@@ -39,6 +40,30 @@ func main() {
 	}
 
 	filePath := flag.Arg(0)
+
+	// --- Native Bytecode Decompiler Auto-Detection Loop ---
+	if *decompile {
+		var output string
+		var err error
+
+		if isStandaloneBytecode(filePath) {
+			fmt.Printf("Analyzing Standalone Pascal Script Bytecode Payload: %s\n", filePath)
+			fmt.Println("================================================================================")
+			output, err = parser.DecompileIFPSFile(filePath)
+		} else {
+			fmt.Printf("Extracting and Disassembling Bytecode from Inno Setup Exe: %s\n", filePath)
+			fmt.Println("================================================================================")
+			output, err = parser.DecompileInnoExe(filePath)
+		}
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Decompilation failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println(output)
+		return
+	}
 
 	fmt.Printf("Analyzing Inno Setup Executable: %s\n", filePath)
 	fmt.Println("================================================================================")
@@ -195,6 +220,22 @@ func main() {
 		fmt.Printf("Used Password:             %s\n", pass)
 	}
 	fmt.Println("================================================================================")
+}
+
+// isStandaloneBytecode checks if a file starts with the "IFPS" bytecode magic bytes.
+func isStandaloneBytecode(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	var magic [4]byte
+	n, err := file.Read(magic[:])
+	if err != nil || n < 4 {
+		return false
+	}
+	return string(magic[:]) == "IFPS"
 }
 
 // readWordlist loads dictionary words line-by-line using a memory-buffered scanner.

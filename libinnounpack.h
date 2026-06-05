@@ -90,6 +90,8 @@ extern "C" {
 extern int ExtractInno(char* filePath, char* outDir, char* password);
 extern char* ListInnoFiles(char* filePath);
 extern char* CrackInnoPassword(char* filePath, char* wordlistJson);
+extern char* DecompileInnoScript(char* filePath);
+extern char* DecompileStandaloneScript(char* filePath);
 extern void FreeString(char* ptr);
 
 #ifdef __cplusplus

@@ -23,5 +23,21 @@ class TestInnoUnpackPythonBindings(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             innounpack.crack_password("non_existent_file_path_1234.exe")
 
+    def test_decompile_script_missing_file_raises_error(self):
+        """Verify that calling decompile_script on a non-existent file raises FileNotFoundError."""
+        with self.assertRaises(FileNotFoundError):
+            innounpack.decompile_script("non_existent_file_path_1234.exe")
+
+    def test_decompile_script_invalid_type_raises_error(self):
+        """Verify that passing an invalid argument type to decompile_script raises TypeError."""
+        with self.assertRaises(TypeError):
+            innounpack.decompile_script(12345)
+
+    def test_decompile_script_invalid_bytes_raises_error(self):
+        """Verify that passing corrupted byte vectors in-memory raises Exception."""
+        corrupted_bytes = b"MZ\x90\x00\x03\x00\x00\x00"
+        with self.assertRaises(Exception):
+            innounpack.decompile_script(corrupted_bytes)
+
 if __name__ == "__main__":
     unittest.main()

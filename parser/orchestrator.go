@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+
+	"innounp-go/parser/ifps"
 )
 
 // FileMetadata represents the metadata of a single file in the installer, returned as JSON.
@@ -284,9 +287,20 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 
 // cleanInnoPath replaces custom Inno path constants like "{app}" with standard folders.
 func cleanInnoPath(innoPath string) string {
-	r := regexp.MustCompile(`\{[a-zA-Z0-9_]+\}`)
-	cleaned := r.ReplaceAllString(innoPath, "")
-	return filepath.Clean(cleaned)
+	importPath := innoPath
+	if len(importPath) > 0 && importPath[0] == '{' {
+		endIdx := -1
+		for i, char := range importPath {
+			if char == '}' {
+				endIdx = i
+				break
+			}
+		}
+		if endIdx != -1 {
+			importPath = importPath[endIdx+1:]
+		}
+	}
+	return filepath.Clean(importPath)
 }
 
 // ListFilesJSON returns the list of files in the installer as a JSON string.
@@ -310,4 +324,77 @@ func getIntField(fields map[string]interface{}, name string) uint32 {
 		return val.(uint32)
 	}
 	return 0
+}
+
+// DecompileInnoExe extracts and decompiles compiled Pascal script bytecode from the Inno Setup executable.
+func DecompileInnoExe(exePath string) (string, error) {
+	file, err := os.Open(exePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open executable: %w", err)
+	}
+	defer file.Close()
+
+	table, err := ParseSetupLdr(exePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse PE Offset Table: %w", err)
+	}
+
+	ver, _, err := DetectVersionFromSetup0(file, table.Offset0)
+	if err != nil {
+		return "", fmt.Errorf("failed to detect Inno version: %w", err)
+	}
+
+	// Read block header for SETUP.0
+	if _, err := file.Seek(table.Offset0+64, io.SeekStart); err != nil {
+		return "", err
+	}
+	blockHeader, err := ReadBlockHeader(file, ver)
+	if err != nil {
+		return "", err
+	}
+
+	blockReader, err := NewBlockReader(file, blockHeader, CompressZip)
+	if err != nil {
+		return "", err
+	}
+	defer blockReader.Close()
+
+	headerSchema, _ := GetRecordSchema(ver, "TSetupHeader")
+	parsedHeader, err := ReadRecord(blockReader, headerSchema)
+	if err != nil {
+		return "", err
+	}
+
+	if len(parsedHeader.AnsiStrings) < 4 {
+		return "", errors.New("unsupported header structure: missing CompiledCode block")
+	}
+
+	compiledCodeBytes := []byte(parsedHeader.AnsiStrings[3])
+	if len(compiledCodeBytes) == 0 {
+		return "", errors.New("this Inno Setup installer does not contain custom Pascal Script compiled bytecode")
+	}
+
+	// Load bytecode into parser
+	ifpsFile, err := ifps.ParseIFPS(bytes.NewReader(compiledCodeBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse IFPS bytecode structure: %w", err)
+	}
+
+	return ifps.Disassemble(ifpsFile)
+}
+
+// DecompileIFPSFile reads and decompiles a standalone CompiledCode.bin file directly.
+func DecompileIFPSFile(ifpsPath string) (string, error) {
+	file, err := os.Open(ifpsPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open bytecode file: %w", err)
+	}
+	defer file.Close()
+
+	ifpsFile, err := ifps.ParseIFPS(file)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse IFPS bytecode structure: %w", err)
+	}
+
+	return ifps.Disassemble(ifpsFile)
 }
