@@ -1,4 +1,4 @@
-# InnoUnp-Go: Pure Go Inno Setup Unpacker & Python API
+# __BETA:__ InnoUnp-Go: Pure Go Inno Setup Unpacker & Python API
 
 A high-performance, cross-platform port of the legendary **Inno Setup Unpacker** (`innounp`) written in pure Go (Golang).
 
