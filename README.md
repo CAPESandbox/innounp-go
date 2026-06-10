@@ -4,6 +4,11 @@ A high-performance, cross-platform port of the legendary **Inno Setup Unpacker**
 
 This platform supports **nearly three decades of Inno Setup installer structures** (from vintage v1.x releases in 1997 up to modern v6.x releases) natively under a unified, schema-driven, zero-dependency codebase. It is fully compiled as a command-line interface (CLI) and exposed as a high-performance, in-process **Python API wrapper** via ctypes.
 
+> [!WARNING]
+> **Active Testing & Beta Phase**
+> This project is currently in its **active Beta and testing phase**. While our parsing coverage is extremely high and extensively validated against years of Inno Setup layouts, we are actively looking for feedback!
+> If you encounter any custom-packed installers, obfuscation techniques, or edge cases where parsing fails, **please let us know and open an issue with the sample hash or error logs** so we can continue to expand and perfect our self-healing capabilities!
+
 ---
 
 ## 1. Codebase Structure
@@ -229,4 +234,4 @@ This project is built upon decades of outstanding reverse-engineering and open-s
 
 1.  **Josef Rathlev** (and the contributors of **`innounp`**): For creating the legendary, battle-tested Object Pascal-based Inno Setup Unpacker command-line tool, which served as the foundational layout blueprint and structural reference for this Go implementation.
 2.  **Daniel Scharrer** (author of **`innoextract`**): For his incredible work engineering a clean, cross-platform C++ Inno Setup extractor, which provided invaluable reference structures, and **gdesmar** for his fork focusing on Pascal Script bytecode (`CompiledCode.bin`) string-extraction concepts.
-3. **Gemini**, and **@doomedraven**: For collaborating hand-in-hand to design, port, implement, and fully verify this modern, schema-driven Go porting initiative from legacy Object Pascal to modern Go, achieving a new milestone in cross-platform forensic utility tooling.
+3.  **Gemini**, and **doomedraven**: For collaborating hand-in-hand to design, port, implement, and fully verify this modern, schema-driven Go porting initiative from legacy Object Pascal to modern Go, achieving a new milestone in cross-platform forensic utility tooling.
