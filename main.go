@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"innounp-go/parser"
 )
@@ -225,45 +226,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	for _, f := range files {
-		if f.DestName == "" {
-			// Skip dummy/empty sync records
-			continue
-		}
-		cleanDest := cleanInnoPath(f.DestName)
-		destPath := filepath.Join(destDir, cleanDest)
-
-		locIndex := f.LocationEntry
-		if locIndex < 0 || locIndex >= len(locations) {
-			fmt.Printf("Skipping file ID %d (no mapped location entry)\n", f.ID)
-			failCount++
-			continue
-		}
-		loc := locations[locIndex]
-
-		// Format dynamic console prefix
-		actionPrefix := "Extracting"
-		if f.Encrypted {
-			actionPrefix = "Decrypting & Extracting"
-		}
-
-		fmt.Printf("%-25s %-40s ... ", actionPrefix, truncateFilename(f.DestName, 38))
-
-		// Set default compression method: Inno Setup 5.3.9+ (ver >= 5300) default-uses LZMA2 decompression!
-		method := parser.CompressLZMA
-		if ver >= 5300 {
-			method = parser.CompressLZMA2
-		}
-
-		extractErr := parser.ExtractFile(filePath, table, ver, isUnicode, &loc, destPath, method, pass, crypt64)
-		if extractErr != nil {
-			fmt.Printf("FAILED (%v)\n", extractErr)
-			failCount++
-		} else {
-			fmt.Println("OK")
-			successCount++
-			totalBytesExtracted += f.OriginalSize
-		}
+	err = parser.ExtractAllFiles(filePath, destDir, pass)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error during extraction: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Forensic Recovery Loop: Extract hidden unmapped payload locations directly (Defeating Evasion Tactics)
@@ -366,6 +332,8 @@ func cleanInnoPath(innoPath string) string {
 			importPath = importPath[endIdx+1:]
 		}
 	}
+	// Normalize backslashes on macOS/Linux to avoid literal backslashes in filenames
+	importPath = strings.ReplaceAll(importPath, "\\", "/")
 	return filepath.Clean(importPath)
 }
 

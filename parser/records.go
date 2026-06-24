@@ -10,6 +10,9 @@ import (
 // EnableDebugLogging is a globally accessible flag to toggle debug output.
 var EnableDebugLogging = false
 
+// ActiveCompressMethod stores the compression method parsed from the Setup Header.
+var ActiveCompressMethod SetupCompressMethod = CompressLZMA
+
 // debugPrintf prints formatting output only if EnableDebugLogging is enabled.
 func debugPrintf(format string, a ...interface{}) {
 	if EnableDebugLogging {
@@ -60,12 +63,23 @@ func ReadRecord(r io.Reader, schema RecordSchema, isUnicode bool) (*ParsedRecord
 			return nil, fmt.Errorf("failed to read AnsiString %d length: %w", i, err)
 		}
 
+		if EnableDebugLogging {
+			fmt.Printf("[DEBUG-STR] Reading AnsiString %d: length %d\n", i, strLen)
+		}
+
 		if strLen > 0 {
 			strBytes := make([]byte, strLen)
 			if _, err := io.ReadFull(r, strBytes); err != nil {
 				return nil, fmt.Errorf("failed to read AnsiString %d bytes: %w", i, err)
 			}
 			record.AnsiStrings = append(record.AnsiStrings, string(strBytes))
+			if EnableDebugLogging {
+				disp := string(strBytes)
+				if len(disp) > 50 {
+					disp = disp[:50] + "..."
+				}
+				fmt.Printf("[DEBUG-STR] AnsiString %d content: %q\n", i, disp)
+			}
 		} else {
 			record.AnsiStrings = append(record.AnsiStrings, "")
 		}

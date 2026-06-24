@@ -44,6 +44,9 @@ func ExtractFile(
 	password string,
 	is64Encryption *Is64EncryptionData,
 ) error {
+	if EnableDebugLogging {
+		fmt.Printf("[DEBUG-EXTRACT] File: %s, StartOffset: %d, ChunkCompressedSize: %d\n", destPath, fl.StartOffset, fl.ChunkCompressedSize)
+	}
 	file, err := os.Open(exePath)
 	if err != nil {
 		return fmt.Errorf("failed to open executable: %w", err)
@@ -113,8 +116,9 @@ func ExtractFile(
 
 	// 6. Skip sub-offset bytes inside chunk to locate current file payload start boundary
 	if fl.ChunkSuboffset > 0 {
-		if _, err := io.CopyN(io.Discard, decompressor, fl.ChunkSuboffset); err != nil {
-			return fmt.Errorf("failed to seek to chunk sub-offset %d: %w", fl.ChunkSuboffset, err)
+		discarded, err := io.CopyN(io.Discard, decompressor, fl.ChunkSuboffset)
+		if err != nil {
+			return fmt.Errorf("failed to seek to chunk sub-offset %d: %w (only discarded %d bytes)", fl.ChunkSuboffset, err, discarded)
 		}
 	}
 
