@@ -781,6 +781,79 @@ func init() {
 		"TSetupRunEntry":           SchemaRegistry[5500]["TSetupRunEntry"],
 	}
 
+	// Initialize Schema Registry for Inno Setup 5.4.x (v5400 series)
+	SchemaRegistry[5400] = map[string]RecordSchema{
+		"TSetupHeader": {
+			NumWideStrings: 26,
+			NumAnsiStrings: 4,
+			FixedFields: []FieldSchema{
+				{"NumLanguageEntries", FieldInt32, 4},
+				{"NumCustomMessageEntries", FieldInt32, 4},
+				{"NumPermissionEntries", FieldInt32, 4},
+				{"NumTypeEntries", FieldInt32, 4},
+				{"NumComponentEntries", FieldInt32, 4},
+				{"NumTaskEntries", FieldInt32, 4},
+				{"NumDirEntries", FieldInt32, 4},
+				{"NumFileEntries", FieldInt32, 4},
+				{"NumFileLocationEntries", FieldInt32, 4},
+				{"NumIconEntries", FieldInt32, 4},
+				{"NumIniEntries", FieldInt32, 4},
+				{"NumRegistryEntries", FieldInt32, 4},
+				{"NumInstallDeleteEntries", FieldInt32, 4},
+				{"NumUninstallDeleteEntries", FieldInt32, 4},
+				{"NumRunEntries", FieldInt32, 4},
+				{"NumUninstallRunEntries", FieldInt32, 4},
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"BackColor", FieldInt32, 4},
+				{"BackColor2", FieldInt32, 4},
+				{"WizardImageBackColor", FieldInt32, 4},
+				{"PasswordHash", FieldBytes, 20},
+				{"PasswordSalt", FieldBytes, 8},
+				{"ExtraDiskSpaceRequired", FieldInt64, 8},
+				{"SlicesPerDisk", FieldInt32, 4},
+				{"UninstallLogMode", FieldEnum, 1},
+				{"DirExistsWarning", FieldEnum, 1},
+				{"PrivilegesRequired", FieldEnum, 1},
+				{"ShowLanguageDialog", FieldEnum, 1},
+				{"LanguageDetectionMethod", FieldEnum, 1},
+				{"CompressMethod", FieldEnum, 1},
+				{"ArchitecturesAllowed", FieldBitset, 1},
+				{"ArchitecturesInstallIn64BitMode", FieldBitset, 1},
+				{"DisableDirPage", FieldEnum, 1},
+				{"DisableProgramGroupPage", FieldEnum, 1},
+				{"UninstallDisplaySize", FieldInt32, 4},
+				{"Options", FieldBitset, 7}, // Adjust set size to 7 bytes for 5.4.x series alignment
+			},
+		},
+		"TSetupLanguageEntry":      SchemaRegistry[5300]["TSetupLanguageEntry"],
+		"TSetupCustomMessageEntry": SchemaRegistry[5300]["TSetupCustomMessageEntry"],
+		"TSetupPermissionEntry":    SchemaRegistry[5300]["TSetupPermissionEntry"],
+		"TSetupTypeEntry":          SchemaRegistry[5300]["TSetupTypeEntry"],
+		"TSetupComponentEntry":     SchemaRegistry[5300]["TSetupComponentEntry"],
+		"TSetupTaskEntry":          SchemaRegistry[5300]["TSetupTaskEntry"],
+		"TSetupDirEntry":           SchemaRegistry[5300]["TSetupDirEntry"],
+		"TSetupFileEntry":          SchemaRegistry[5300]["TSetupFileEntry"],
+		"TSetupFileLocationEntry":  SchemaRegistry[5300]["TSetupFileLocationEntry"],
+		"TSetupIconEntry": {
+			NumWideStrings: 13, // 13 WideStrings in 5.4.x series! AppUserModelID was added in 5.4.0
+			NumAnsiStrings: 0,
+			FixedFields:    SchemaRegistry[5300]["TSetupIconEntry"].FixedFields,
+		},
+		"TSetupIniEntry":           SchemaRegistry[5300]["TSetupIniEntry"],
+		"TSetupRegistryEntry":      SchemaRegistry[5300]["TSetupRegistryEntry"],
+		"TSetupDeleteEntry": {
+			NumWideStrings: 7,
+			NumAnsiStrings: 0,
+			FixedFields: []FieldSchema{
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"Type", FieldEnum, 1},
+			},
+		},
+		"TSetupRunEntry":           SchemaRegistry[5300]["TSetupRunEntry"],
+	}
+
 	// Initialize Schema Registry for Inno Setup 7.0.0+ (v7000 Unicode series)
 	SchemaRegistry[7000] = map[string]RecordSchema{
 		"TSetupHeader": {

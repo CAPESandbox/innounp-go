@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"innounp-go/parser"
 )
@@ -103,7 +104,7 @@ func main() {
 	}
 
 	// 2. Parse file lists and locations
-	ver, isUnicode, files, locations, crypt64, _, _, err := parser.ListFilesAndLocations(filePath)
+	ver, isUnicode, files, locations, crypt64, _, _, _, err := parser.ListFilesAndLocations(filePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing installer block: %v\n", err)
 		os.Exit(1)
@@ -116,8 +117,22 @@ func main() {
 
 	// 3. Coordinate Multi-Threaded Password Recovery (Forensics / Sandbox Cracker)
 	pass := *password
-	if *crack || *wordlistFile != "" {
-		fmt.Println("Initiating Multi-Core Parallel Password Recovery...")
+	hasEncryptedFiles := false
+	for _, f := range files {
+		if f.Encrypted {
+			hasEncryptedFiles = true
+			break
+		}
+	}
+
+	shouldCrack := *crack || *wordlistFile != "" || (hasEncryptedFiles && pass == "")
+	if shouldCrack {
+		if hasEncryptedFiles && pass == "" && !*crack && *wordlistFile == "" {
+			fmt.Println("[!] FORENSIC ALERT: Encrypted files detected but no password was specified!")
+			fmt.Println("    Automatically initiating parallel password recovery...")
+		} else {
+			fmt.Println("Initiating Multi-Core Parallel Password Recovery...")
+		}
 		var list []string
 		if *wordlistFile != "" {
 			var err error
@@ -225,46 +240,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	for _, f := range files {
-		if f.DestName == "" {
-			// Skip dummy/empty sync records
-			continue
-		}
-		cleanDest := cleanInnoPath(f.DestName)
-		destPath := filepath.Join(destDir, cleanDest)
-
-		locIndex := f.LocationEntry
-		if locIndex < 0 || locIndex >= len(locations) {
-			fmt.Printf("Skipping file ID %d (no mapped location entry)\n", f.ID)
-			failCount++
-			continue
-		}
-		loc := locations[locIndex]
-
-		// Format dynamic console prefix
-		actionPrefix := "Extracting"
-		if f.Encrypted {
-			actionPrefix = "Decrypting & Extracting"
-		}
-
-		fmt.Printf("%-25s %-40s ... ", actionPrefix, truncateFilename(f.DestName, 38))
-
-		// Set default compression method: Inno Setup 5.3.9+ (ver >= 5300) default-uses LZMA2 decompression!
-		method := parser.CompressLZMA
-		if ver >= 5300 {
-			method = parser.CompressLZMA2
-		}
-
-		extractErr := parser.ExtractFile(filePath, table, ver, isUnicode, &loc, destPath, method, pass, crypt64)
-		if extractErr != nil {
-			fmt.Printf("FAILED (%v)\n", extractErr)
-			failCount++
-		} else {
-			fmt.Println("OK")
-			successCount++
-			totalBytesExtracted += f.OriginalSize
-		}
+	sCount, fCount, bytesExtracted, err := parser.ExtractAllFiles(filePath, destDir, pass)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error during extraction: %v\n", err)
+		os.Exit(1)
 	}
+	successCount += sCount
+	failCount += fCount
+	totalBytesExtracted += bytesExtracted
 
 	// Forensic Recovery Loop: Extract hidden unmapped payload locations directly (Defeating Evasion Tactics)
 	if len(locations) > len(files) {
@@ -366,6 +349,8 @@ func cleanInnoPath(innoPath string) string {
 			importPath = importPath[endIdx+1:]
 		}
 	}
+	// Normalize backslashes on macOS/Linux to avoid literal backslashes in filenames
+	importPath = strings.ReplaceAll(importPath, "\\", "/")
 	return filepath.Clean(importPath)
 }
 

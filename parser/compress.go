@@ -243,6 +243,10 @@ func NewBlockReader(r io.Reader, header *BlockHeader, method SetupCompressMethod
 			return nil, fmt.Errorf("failed to read LZMA properties: %w", err)
 		}
 
+		if EnableDebugLogging {
+			fmt.Printf("[DEBUG-LZMA] Read LZMA properties: %x\n", props)
+		}
+
 		// Synthesize standard 13-byte classic LZMA header by appending 8 bytes of uncompressed size (unknown = 0xFF...)
 		header13 := make([]byte, 13)
 		copy(header13[0:5], props)

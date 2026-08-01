@@ -19,7 +19,7 @@ func ExtractInno(filePath *C.char, outDir *C.char, password *C.char) C.int {
 	goOutDir := C.GoString(outDir)
 	goPassword := C.GoString(password)
 
-	err := parser.ExtractAllFiles(goFilePath, goOutDir, goPassword)
+	_, _, _, err := parser.ExtractAllFiles(goFilePath, goOutDir, goPassword)
 	if err != nil {
 		return C.int(-1)
 	}

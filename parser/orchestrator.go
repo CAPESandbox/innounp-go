@@ -11,26 +11,40 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"innounp-go/parser/ifps"
 )
 
+// LogProgress is called to print extraction progress and warnings. By default, it prints to standard output.
+// Library consumers can disable or redirect progress logging by overriding or setting this to nil.
+var LogProgress = func(format string, a ...interface{}) {
+	fmt.Printf(format, a...)
+}
+
+func logProgress(format string, a ...interface{}) {
+	if LogProgress != nil {
+		LogProgress(format, a...)
+	}
+}
+
 // ListFilesAndLocations parses SETUP.0 and extracts file/location lists sequentially.
-func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []UnifiedFileLocationEntry, *Is64EncryptionData, []byte, []byte, error) {
+func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []UnifiedFileLocationEntry, *Is64EncryptionData, []byte, []byte, SetupCompressMethod, error) {
 	file, err := os.Open(exePath)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to open executable: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to open executable: %w", err)
 	}
 	defer file.Close()
 
 	table, err := ParseSetupLdr(exePath)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to parse PE Offset Table: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to parse PE Offset Table: %w", err)
 	}
 
 	ver, isUnicode, err := DetectVersionFromSetup0(file, table.Offset0)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to detect Inno Setup version: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to detect Inno Setup version: %w", err)
 	}
 
 	var crypt64 *Is64EncryptionData
@@ -39,12 +53,12 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	if ver >= 6500 {
 		// Seek to table.Offset0 + 64 (signature size is 64)
 		if _, err := file.Seek(table.Offset0+64, io.SeekStart); err != nil {
-			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to seek to encryption header: %w", err)
+			return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to seek to encryption header: %w", err)
 		}
 
 		var encHeaderCRC uint32
 		if err := binary.Read(file, binary.LittleEndian, &encHeaderCRC); err != nil {
-			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to read encryption header CRC: %w", err)
+			return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to read encryption header CRC: %w", err)
 		}
 
 		var encHeader struct {
@@ -55,7 +69,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			PasswordTest  int32
 		}
 		if err := binary.Read(file, binary.LittleEndian, &encHeader); err != nil {
-			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to read encryption header: %w", err)
+			return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to read encryption header: %w", err)
 		}
 
 		// Verify CRC of the encryption header bytes
@@ -66,7 +80,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		// Real CRC calculation via hash/crc32
 		actualCRC = crc32.ChecksumIEEE(encBuf.Bytes())
 		if actualCRC != encHeaderCRC {
-			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("encryption header CRC mismatch (expected %08x, got %08x)", encHeaderCRC, actualCRC)
+			return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("encryption header CRC mismatch (expected %08x, got %08x)", encHeaderCRC, actualCRC)
 		}
 
 		crypt64 = &Is64EncryptionData{
@@ -81,18 +95,18 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 
 	// Read block header for SETUP.0 Block 1
 	if _, err := file.Seek(setup0BlockOffset, io.SeekStart); err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to seek to SETUP.0 Block 1: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to seek to SETUP.0 Block 1: %w", err)
 	}
 
 	blockHeader1, err := ReadBlockHeader(file, ver)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to read SETUP.0 Block 1 header: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to read SETUP.0 Block 1 header: %w", err)
 	}
 
 	// Gracefully detect multi-disk spanned installers whose external setup-1.bin files are missing
 	stat, statErr := file.Stat()
 	if statErr == nil && int64(blockHeader1.StoredSize) > stat.Size() {
-		return 0, false, nil, nil, nil, nil, nil, errors.New("this file is only a small installer launcher (stub). The actual installation files and catalog database are stored in separate files (such as setup-1.bin) which are missing from this folder")
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, errors.New("this file is only a small installer launcher (stub). The actual installation files and catalog database are stored in separate files (such as setup-1.bin) which are missing from this folder")
 	}
 
 	compMethod := getSetup0CompressionMethod(ver)
@@ -120,7 +134,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		}
 	}
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to decompress SETUP.0 Block 1 metadata: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to decompress SETUP.0 Block 1 metadata: %w", err)
 	}
 	rawBytes1 := decompressedBuf1.Bytes()
 	r := bytes.NewReader(rawBytes1)
@@ -134,6 +148,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 
 	origVer := ver
 	success := false
+	returnedCompressMethod := compMethod
 
 	// Two-Attempt Self-Healing Try-Fallback Loop:
 	// First attempt uses the detected version. If parsing fails, we automatically fallback to
@@ -142,8 +157,8 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		r.Seek(0, io.SeekStart)
 		if attempt == 2 {
 			if origVer == 5500 {
-				fmt.Printf("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed 5.5.0 layout.\n")
-				fmt.Println("    Self-healing to 5.3.x alignment fallback...")
+				logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed 5.5.0 layout.\n")
+				logProgress("    Self-healing to 5.3.x alignment fallback...\n")
 				ver = 5300
 			} else {
 				break
@@ -156,11 +171,29 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			continue
 		}
 
+		if EnableDebugLogging {
+			logProgress("[DEBUG-POS] Position before Header: %d\n", r.Size() - int64(r.Len()))
+		}
 		var err error
 		parsedHeader, err = ReadRecord(r, headerSchema, isUnicode)
+		if EnableDebugLogging {
+			logProgress("[DEBUG-POS] Position after Header: %d\n", r.Size() - int64(r.Len()))
+			pos := r.Size() - int64(r.Len())
+			if pos+64 <= int64(len(rawBytes1)) {
+				logProgress("[DEBUG-HEX] Next 64 bytes: %x\n", rawBytes1[pos:pos+64])
+			} else {
+				logProgress("[DEBUG-HEX] Next bytes: %x\n", rawBytes1[pos:])
+			}
+		}
 		if err != nil {
 			debugPrintf("[DEBUG] Attempt %d: failed to parse SETUP header: %v\n", attempt, err)
 			continue
+		}
+
+		if EnableDebugLogging {
+			logProgress("[DEBUG] Header WideStrings (%d): %+v\n", len(parsedHeader.WideStrings), parsedHeader.WideStrings)
+			logProgress("[DEBUG] Header AnsiStrings (%d): %+v\n", len(parsedHeader.AnsiStrings), parsedHeader.AnsiStrings)
+			logProgress("[DEBUG] Header Fields: %+v\n", parsedHeader.Fields)
 		}
 
 		// Self-Healing Heuristic Check: Check if UninstallDisplaySize is astronomically huge (e.g. > 10 Terabytes)
@@ -176,8 +209,8 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				displaySize = int64(v)
 			}
 			if displaySize > 10995116277760 || displaySize < 0 {
-				fmt.Printf("\n[!] FORENSIC HEURISTIC: Detected Version Spoofing via large uninstall size (%d bytes)!\n", displaySize)
-				fmt.Println("    Self-healing stream alignment in progress...")
+				logProgress("\n[!] FORENSIC HEURISTIC: Detected Version Spoofing via large uninstall size (%d bytes)!\n", displaySize)
+				logProgress("    Self-healing stream alignment in progress...\n")
 				ver = 5300
 				headerSchema, _ = GetRecordSchema(5300, "TSetupHeader", isUnicode)
 				parsedHeader, err = ReadRecord(r, headerSchema, isUnicode)
@@ -242,6 +275,9 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				break
 			}
 			for i := uint32(0); i < list.count; i++ {
+				if EnableDebugLogging {
+					logProgress("[DEBUG-POS] Position before skipping %s item %d: %d\n", list.schema, i, r.Size() - int64(r.Len()))
+				}
 				if _, err := ReadRecord(r, schema, isUnicode); err != nil {
 					debugPrintf("[DEBUG] Attempt %d: failed to skip list %s at item %d: %v\n", attempt, list.schema, i, err)
 					skipFailed = true
@@ -354,6 +390,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				}
 			}
 			compressMethod := getIntField(parsedHeader.Fields, "CompressMethod")
+			returnedCompressMethod = SetupCompressMethod(compressMethod)
 			if err := skipDecompDll(r, ver, uint8(compressMethod)); err != nil {
 				debugPrintf("[DEBUG] Attempt %d: failed to skip Decompressor DLL: %v\n", attempt, err)
 				continue
@@ -402,6 +439,10 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				debugPrintf("[DEBUG] Attempt %d: failed to read file location %d: %v\n", attempt, i, err)
 				locFailed = true
 				break
+			}
+
+			if EnableDebugLogging && i < 5 {
+				logProgress("[DEBUG-LOC] Location %d: %+v\n", i, rec.Fields)
 			}
 
 			firstSlice := int32(rec.Fields["FirstSlice"].(uint32))
@@ -468,7 +509,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	}
 
 	if !success {
-		return 0, false, nil, nil, nil, nil, nil, errors.New("failed to parse Inno Setup catalog after all try-fallback attempts")
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, errors.New("failed to parse Inno Setup catalog after all try-fallback attempts")
 	}
 
 	// Extract password fields for cracking propagation
@@ -490,41 +531,192 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	debugPrintf("    Locations:      %d\n", numLocations)
 	debugPrintf("    Runs:           %d\n\n", numRuns)
 
-	return ver, isUnicode, filesMetadata, locations, crypt64, passwordHash, passwordSalt, nil
+	return ver, isUnicode, filesMetadata, locations, crypt64, passwordHash, passwordSalt, returnedCompressMethod, nil
 }
 
 // ExtractAllFiles extracts every file from the installer executable.
-func ExtractAllFiles(exePath string, outDir string, password string) error {
-	ver, isUnicode, files, locations, crypt64, _, _, err := ListFilesAndLocations(exePath)
+func ExtractAllFiles(exePath string, outDir string, password string) (int, int, int64, error) {
+	ver, isUnicode, files, locations, crypt64, _, _, compMethod, err := ListFilesAndLocations(exePath)
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
 
 	table, err := ParseSetupLdr(exePath)
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
 
-	for _, f := range files {
-		// Determine local extraction path, mapping e.g. "{app}\bin\file.dll" -> "outDir/app/bin/file.dll"
-		cleanDest := cleanInnoPath(f.DestName)
-		destPath := filepath.Join(outDir, cleanDest)
+	var successCount, failCount int
+	var totalBytesExtracted int64
 
-		// Get the file location index
+	// 1. Group files by their location chunk (StartOffset + ChunkCompressedSize)
+	type ChunkKey struct {
+		StartOffset int32
+		Size        int64
+	}
+
+	type FileWithLoc struct {
+		File *FileMetadata
+		Loc  *UnifiedFileLocationEntry
+	}
+
+	chunkGroups := make(map[ChunkKey][]FileWithLoc)
+	for i := range files {
+		f := &files[i]
 		locIndex := f.LocationEntry
 		if locIndex < 0 || locIndex >= len(locations) {
 			continue
 		}
-		loc := locations[locIndex]
-
-		fmt.Printf("Extracting: %s -> %s\n", f.DestName, destPath)
-		err := ExtractFile(exePath, table, ver, isUnicode, &loc, destPath, CompressLZMA, password, crypt64)
-		if err != nil {
-			fmt.Printf("Warning: Failed to extract %s: %v\n", f.DestName, err)
-		}
+		loc := &locations[locIndex]
+		key := ChunkKey{int32(loc.StartOffset), loc.ChunkCompressedSize}
+		chunkGroups[key] = append(chunkGroups[key], FileWithLoc{f, loc})
 	}
 
-	return nil
+	// Open the executable file once outside the loop
+	file, err := os.Open(exePath)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("failed to open executable: %w", err)
+	}
+	defer file.Close()
+
+	// 2. Process each unique chunk sequentially
+	for key, group := range chunkGroups {
+		// Sort files in the chunk by ChunkSuboffset
+		sort.Slice(group, func(i, j int) bool {
+			return group[i].Loc.ChunkSuboffset < group[j].Loc.ChunkSuboffset
+		})
+
+		// Seek to chunk start offset
+		absOffset := table.Offset1 + int64(key.StartOffset)
+		if _, err := file.Seek(absOffset, io.SeekStart); err != nil {
+			return 0, 0, 0, fmt.Errorf("failed to seek to chunk start: %w", err)
+		}
+
+		// Read and verify comp ID
+		var compID uint32
+		if err := binary.Read(file, binary.LittleEndian, &compID); err != nil {
+			return 0, 0, 0, fmt.Errorf("failed to read comp ID: %w", err)
+		}
+		if compID != 0x1A626C7A {
+			return 0, 0, 0, errors.New("invalid compression ID: source block is corrupted")
+		}
+
+		// Setup Decryption Reader
+		var rawReader io.Reader = file
+		firstLoc := group[0].Loc
+		if hasFlag(firstLoc.Flags, 6) { // foChunkEncrypted
+			if password == "" {
+				return 0, 0, 0, errors.New("file is encrypted but no password was specified")
+			}
+			if ver < 6400 {
+				salt := make([]byte, 8)
+				if _, err := io.ReadFull(file, salt); err != nil {
+					return 0, 0, 0, fmt.Errorf("failed to read encryption salt: %w", err)
+				}
+				cipher, err := InitializeRC4Decryptor(password, salt, true, isUnicode)
+				if err != nil {
+					return 0, 0, 0, fmt.Errorf("failed to initialize RC4 decryptor: %w", err)
+				}
+				rawReader = &DecryptReader{underlying: file, cipherRC4: cipher}
+			} else {
+				if crypt64 == nil {
+					return 0, 0, 0, errors.New("missing v6 encryption configuration")
+				}
+				keyBytes := GenerateChaCha20Key(password, crypt64.KDFSalt, crypt64.KDFIterations)
+				nonce := RecreateChaCha20Nonce(crypt64.BaseNonce, int64(key.StartOffset), firstLoc.FirstSlice)
+				cipher, err := InitializeChaCha20Decryptor(keyBytes, nonce)
+				if err != nil {
+					return 0, 0, 0, fmt.Errorf("failed to initialize ChaCha20 decryptor: %w", err)
+				}
+				rawReader = &DecryptReader{underlying: file, cipherCC20: cipher}
+			}
+		}
+
+		// Initialize Decompressor Stream
+		decompressor, err := NewDecompressor(rawReader, compMethod)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("failed to initialize decompressor: %w", err)
+		}
+
+		// Process files sequentially in single-pass
+		var currentStreamPos int64 = 0
+		for _, item := range group {
+			cleanDest := cleanInnoPath(item.File.DestName)
+			destPath := filepath.Join(outDir, cleanDest)
+
+			// Normalize filename display
+			logProgress("Extracting: %-50s ... ", truncateFilename(item.File.DestName, 48))
+
+			// Discard bytes to reach the ChunkSuboffset
+			diff := item.Loc.ChunkSuboffset - currentStreamPos
+			if diff > 0 {
+				if _, err := io.CopyN(io.Discard, decompressor, diff); err != nil {
+					logProgress("FAILED (failed to skip %d bytes: %v)\n", diff, err)
+					failCount++
+					continue
+				}
+				currentStreamPos += diff
+			} else if diff < 0 {
+				logProgress("FAILED (stream misalignment: current pos %d, target suboffset %d)\n", currentStreamPos, item.Loc.ChunkSuboffset)
+				failCount++
+				continue
+			}
+
+			// Extract file
+			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+				logProgress("FAILED (failed to create dir: %v)\n", err)
+				failCount++
+				continue
+			}
+
+			destFile, err := os.Create(destPath)
+			if err != nil {
+				logProgress("FAILED (failed to create file: %v)\n", err)
+				failCount++
+				continue
+			}
+
+			// Use defensive size capped buffer reading
+			buf := make([]byte, 64*1024)
+			bytesLeft := item.Loc.OriginalSize
+			fileFailed := false
+			for bytesLeft > 0 {
+				toRead := int64(len(buf))
+				if toRead > bytesLeft {
+					toRead = bytesLeft
+				}
+				n, rerr := io.ReadFull(decompressor, buf[:toRead])
+				if rerr != nil && rerr != io.ErrUnexpectedEOF && rerr != io.EOF {
+					logProgress("FAILED (read error: %v)\n", rerr)
+					fileFailed = true
+					break
+				}
+				if n == 0 {
+					break
+				}
+				if _, werr := destFile.Write(buf[:n]); werr != nil {
+					logProgress("FAILED (write error: %v)\n", werr)
+					fileFailed = true
+					break
+				}
+				bytesLeft -= int64(n)
+				currentStreamPos += int64(n)
+			}
+			destFile.Close()
+
+			if !fileFailed {
+				logProgress("OK\n")
+				successCount++
+				totalBytesExtracted += item.File.OriginalSize
+			} else {
+				failCount++
+			}
+		}
+
+		decompressor.Close()
+	}
+
+	return successCount, failCount, totalBytesExtracted, nil
 }
 
 // cleanInnoPath replaces custom Inno path constants like "{app}" with standard folders.
@@ -542,12 +734,14 @@ func cleanInnoPath(innoPath string) string {
 			importPath = importPath[endIdx+1:]
 		}
 	}
+	// Normalize backslashes to forward slashes on macOS/Linux
+	importPath = strings.ReplaceAll(importPath, "\\", "/")
 	return filepath.Clean(importPath)
 }
 
 // ListFilesJSON returns the list of files in the installer as a JSON string.
 func ListFilesJSON(exePath string) (string, error) {
-	_, _, files, _, _, _, _, err := ListFilesAndLocations(exePath)
+	_, _, files, _, _, _, _, _, err := ListFilesAndLocations(exePath)
 	if err != nil {
 		return "", err
 	}
@@ -639,14 +833,10 @@ func DecompileInnoExe(exePath string) (string, error) {
 		return "", err
 	}
 
-	// Dynamic bytecode offset: Unicode has CompiledCodeText at index 3,
-	// while ANSI stores CompiledCodeText at index 30!
-	codeIndex := 30
-	if isUnicode {
-		codeIndex = 3
-	}
+	// Dynamic bytecode offset: CompiledCodeText is always the final AnsiString
+	codeIndex := len(parsedHeader.AnsiStrings) - 1
 
-	if len(parsedHeader.AnsiStrings) <= codeIndex {
+	if codeIndex < 0 {
 		return "", errors.New("unsupported header structure: missing CompiledCode block")
 	}
 
@@ -744,4 +934,12 @@ func skipDecompDll(r io.Reader, ver int, compressMethod uint8) error {
 		}
 	}
 	return nil
+}
+
+// truncateFilename ensures the filename fits neatly inside the console table columns.
+func truncateFilename(name string, maxLen int) string {
+	if len(name) <= maxLen {
+		return name
+	}
+	return "..." + name[len(name)-maxLen+3:]
 }

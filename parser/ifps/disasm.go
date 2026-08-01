@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // Disassemble walks the types registry, variables, functions, and decodes bytecode instructions
 // into clean, human-readable high-level symbolic assembly.
 func Disassemble(f *IFPSFile) (string, error) {
 	var buf bytes.Buffer
+
+	// Prepend the high-level pseudo-Pascal decompilation summary
+	buf.WriteString(DecompileToPseudoPascal(f))
 
 	buf.WriteString("================================================================================\n")
 	buf.WriteString("             INNO SETUP PASCAL SCRIPT BYTECODE DISASSEMBLY (IFPS)\n")
@@ -253,4 +257,127 @@ func mapOpName(op Op) string {
 	default:
 		return fmt.Sprintf("UNKNOWN(0x%02X)", byte(op))
 	}
+}
+
+// DecompileToPseudoPascal produces a high-level pseudo-Pascal representation of internal functions
+func DecompileToPseudoPascal(f *IFPSFile) string {
+	var buf bytes.Buffer
+
+	buf.WriteString("================================================================================\n")
+	buf.WriteString("             INNO SETUP PASCAL SCRIPT HIGH-LEVEL DECOMPILED CODE (PSEUDO-PASCAL)\n")
+	buf.WriteString("================================================================================\n\n")
+
+	// Help map internal function IDs to names
+	funcNames := make(map[uint32]string)
+	for _, otherFn := range f.Functions {
+		funcNames[uint32(otherFn.Index)] = otherFn.Name
+	}
+
+	for _, fn := range f.Functions {
+		if fn.IsExternal {
+			continue
+		}
+
+		fmt.Fprintf(&buf, "procedure %s();\n", fn.Name)
+		buf.WriteString("begin\n")
+
+		// Analyze bytecode to find string constants and function calls
+		code := fn.Bytecode
+		size := len(code)
+		var pendingStrings []string
+
+		// First pass: identify instruction boundaries to prevent desynchronization
+		isInstr := make([]bool, size)
+		ptr := 0
+		for ptr < size {
+			op := Op(code[ptr])
+			isInstr[ptr] = true
+			switch op {
+			case OpAssign:
+				// OpAssign has 8 bytes of operands
+				for k := 1; k <= 8; k++ {
+					if ptr+k < size {
+						isInstr[ptr+k] = true
+					}
+				}
+				ptr += 9
+			case OpPush, OpPushVar, OpPop, OpJump, OpJumpTrue, OpJumpFalse, OpCall, OpCallVar:
+				// These have 4 bytes of operands
+				for k := 1; k <= 4; k++ {
+					if ptr+k < size {
+						isInstr[ptr+k] = true
+					}
+				}
+				ptr += 5
+			default:
+				// 1-byte instruction
+				ptr++
+			}
+		}
+
+		// Second pass: decode instructions and extract pending strings
+		i := 0
+		for i < size {
+			if !isInstr[i] {
+				// Scan printable ASCII string that is not part of any instruction
+				if code[i] >= 0x20 && code[i] <= 0x7E {
+					start := i
+					for i < size && !isInstr[i] && code[i] >= 0x20 && code[i] <= 0x7E {
+						i++
+					}
+					str := string(code[start:i])
+					if len(str) >= 3 && !strings.Contains(str, "ASSIGN") && !strings.Contains(str, "CALL") && !strings.Contains(str, "PUSH") && !strings.Contains(str, "POP") {
+						pendingStrings = append(pendingStrings, str)
+					}
+				} else {
+					i++
+				}
+				continue
+			}
+
+			op := Op(code[i])
+			switch op {
+			case OpAssign:
+				i += 9
+			case OpPush, OpPushVar, OpPop:
+				i += 5
+			case OpJump, OpJumpTrue, OpJumpFalse:
+				i += 5
+			case OpCall, OpCallVar:
+				if i+1+4 <= size {
+					target := binary.LittleEndian.Uint32(code[i+1 : i+1+4])
+					name := funcNames[target]
+					if name == "" {
+						name = fmt.Sprintf("Func_%d", target)
+					}
+					
+					// Form a nice looking call!
+					if name == "EXTRACTTEMPORARYFILE" && len(pendingStrings) > 0 {
+						fmt.Fprintf(&buf, "    ExtractTemporaryFile('%s');\n", pendingStrings[len(pendingStrings)-1])
+						pendingStrings = nil
+					} else if len(pendingStrings) > 0 {
+						argsStr := ""
+						for idx, s := range pendingStrings {
+							if idx > 0 {
+								argsStr += ", "
+							}
+							argsStr += fmt.Sprintf("'%s'", s)
+						}
+						fmt.Fprintf(&buf, "    %s(%s);\n", name, argsStr)
+						pendingStrings = nil
+					} else {
+						fmt.Fprintf(&buf, "    %s();\n", name)
+					}
+				}
+				i += 5
+			default:
+				i++
+			}
+		}
+
+		buf.WriteString("end;\n\n")
+	}
+
+	buf.WriteString("================================================================================\n\n")
+	return buf.String()
 }
