@@ -267,6 +267,12 @@ func DecompileToPseudoPascal(f *IFPSFile) string {
 	buf.WriteString("             INNO SETUP PASCAL SCRIPT HIGH-LEVEL DECOMPILED CODE (PSEUDO-PASCAL)\n")
 	buf.WriteString("================================================================================\n\n")
 
+	// Help map internal function IDs to names
+	funcNames := make(map[uint32]string)
+	for _, otherFn := range f.Functions {
+		funcNames[uint32(otherFn.Index)] = otherFn.Name
+	}
+
 	for _, fn := range f.Functions {
 		if fn.IsExternal {
 			continue
@@ -278,24 +284,65 @@ func DecompileToPseudoPascal(f *IFPSFile) string {
 		// Analyze bytecode to find string constants and function calls
 		code := fn.Bytecode
 		size := len(code)
-		i := 0
 		var pendingStrings []string
 
-		// Help map internal function IDs to names
-		funcNames := make(map[uint32]string)
-		for _, otherFn := range f.Functions {
-			funcNames[uint32(otherFn.Index)] = otherFn.Name
+		// First pass: identify instruction boundaries to prevent desynchronization
+		isInstr := make([]bool, size)
+		ptr := 0
+		for ptr < size {
+			op := Op(code[ptr])
+			isInstr[ptr] = true
+			switch op {
+			case OpAssign:
+				// OpAssign has 8 bytes of operands
+				for k := 1; k <= 8; k++ {
+					if ptr+k < size {
+						isInstr[ptr+k] = true
+					}
+				}
+				ptr += 9
+			case OpPush, OpPushVar, OpPop, OpJump, OpJumpTrue, OpJumpFalse, OpCall, OpCallVar:
+				// These have 4 bytes of operands
+				for k := 1; k <= 4; k++ {
+					if ptr+k < size {
+						isInstr[ptr+k] = true
+					}
+				}
+				ptr += 5
+			default:
+				// 1-byte instruction
+				ptr++
+			}
 		}
 
+		// Second pass: decode instructions and extract pending strings
+		i := 0
 		for i < size {
+			if !isInstr[i] {
+				// Scan printable ASCII string that is not part of any instruction
+				if code[i] >= 0x20 && code[i] <= 0x7E {
+					start := i
+					for i < size && !isInstr[i] && code[i] >= 0x20 && code[i] <= 0x7E {
+						i++
+					}
+					str := string(code[start:i])
+					if len(str) >= 3 && !strings.Contains(str, "ASSIGN") && !strings.Contains(str, "CALL") && !strings.Contains(str, "PUSH") && !strings.Contains(str, "POP") {
+						pendingStrings = append(pendingStrings, str)
+					}
+				} else {
+					i++
+				}
+				continue
+			}
+
 			op := Op(code[i])
 			switch op {
 			case OpAssign:
-				i += 8
+				i += 9
 			case OpPush, OpPushVar, OpPop:
-				i += 4
+				i += 5
 			case OpJump, OpJumpTrue, OpJumpFalse:
-				i += 4
+				i += 5
 			case OpCall, OpCallVar:
 				if i+1+4 <= size {
 					target := binary.LittleEndian.Uint32(code[i+1 : i+1+4])
@@ -321,22 +368,9 @@ func DecompileToPseudoPascal(f *IFPSFile) string {
 					} else {
 						fmt.Fprintf(&buf, "    %s();\n", name)
 					}
-					i += 4
 				}
-			}
-			
-			// Scan ahead for any printable ASCII string sequences
-			// (heuristically capture anything looking like an embedded string in this offset)
-			if i < size && code[i] >= 0x20 && code[i] <= 0x7E {
-				start := i
-				for i < size && code[i] >= 0x20 && code[i] <= 0x7E {
-					i++
-				}
-				str := string(code[start:i])
-				if len(str) >= 3 && !strings.Contains(str, "ASSIGN") && !strings.Contains(str, "CALL") && !strings.Contains(str, "PUSH") && !strings.Contains(str, "POP") {
-					pendingStrings = append(pendingStrings, str)
-				}
-			} else {
+				i += 5
+			default:
 				i++
 			}
 		}

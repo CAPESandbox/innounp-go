@@ -10,9 +10,6 @@ import (
 // EnableDebugLogging is a globally accessible flag to toggle debug output.
 var EnableDebugLogging = false
 
-// ActiveCompressMethod stores the compression method parsed from the Setup Header.
-var ActiveCompressMethod SetupCompressMethod = CompressLZMA
-
 // debugPrintf prints formatting output only if EnableDebugLogging is enabled.
 func debugPrintf(format string, a ...interface{}) {
 	if EnableDebugLogging {

@@ -16,38 +16,50 @@ import (
 	"innounp-go/parser/ifps"
 )
 
+// LogProgress is called to print extraction progress and warnings. By default, it prints to standard output.
+// Library consumers can disable or redirect progress logging by overriding or setting this to nil.
+var LogProgress = func(format string, a ...interface{}) {
+	fmt.Printf(format, a...)
+}
+
+func logProgress(format string, a ...interface{}) {
+	if LogProgress != nil {
+		LogProgress(format, a...)
+	}
+}
+
 // ListFilesAndLocations parses SETUP.0 and extracts file/location lists sequentially.
-func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []UnifiedFileLocationEntry, *Is64EncryptionData, []byte, []byte, error) {
+func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []UnifiedFileLocationEntry, *Is64EncryptionData, []byte, []byte, SetupCompressMethod, error) {
 	file, err := os.Open(exePath)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to open executable: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to open executable: %w", err)
 	}
 	defer file.Close()
 
 	table, err := ParseSetupLdr(exePath)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to parse PE Offset Table: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to parse PE Offset Table: %w", err)
 	}
 
 	ver, isUnicode, err := DetectVersionFromSetup0(file, table.Offset0)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to detect Inno Setup version: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to detect Inno Setup version: %w", err)
 	}
 
 	// Read block header for SETUP.0 Block 1
 	if _, err := file.Seek(table.Offset0+64, io.SeekStart); err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to seek to SETUP.0 Block 1: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to seek to SETUP.0 Block 1: %w", err)
 	}
 
 	blockHeader1, err := ReadBlockHeader(file, ver)
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to read SETUP.0 Block 1 header: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to read SETUP.0 Block 1 header: %w", err)
 	}
 
 	// Gracefully detect multi-disk spanned installers whose external setup-1.bin files are missing
 	stat, statErr := file.Stat()
 	if statErr == nil && int64(blockHeader1.StoredSize) > stat.Size() {
-		return 0, false, nil, nil, nil, nil, nil, errors.New("this file is only a small installer launcher (stub). The actual installation files and catalog database are stored in separate files (such as setup-1.bin) which are missing from this folder")
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, errors.New("this file is only a small installer launcher (stub). The actual installation files and catalog database are stored in separate files (such as setup-1.bin) which are missing from this folder")
 	}
 
 	compMethod := getSetup0CompressionMethod(ver)
@@ -75,7 +87,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		}
 	}
 	if err != nil {
-		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to decompress SETUP.0 Block 1 metadata: %w", err)
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, fmt.Errorf("failed to decompress SETUP.0 Block 1 metadata: %w", err)
 	}
 	rawBytes1 := decompressedBuf1.Bytes()
 	r := bytes.NewReader(rawBytes1)
@@ -90,6 +102,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 
 	origVer := ver
 	success := false
+	returnedCompressMethod := compMethod
 
 	// Two-Attempt Self-Healing Try-Fallback Loop:
 	// First attempt uses the detected version. If parsing fails, we automatically fallback to
@@ -98,8 +111,8 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		r.Seek(0, io.SeekStart)
 		if attempt == 2 {
 			if origVer == 5500 {
-				fmt.Printf("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed 5.5.0 layout.\n")
-				fmt.Println("    Self-healing to 5.3.x alignment fallback...")
+				logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed 5.5.0 layout.\n")
+				logProgress("    Self-healing to 5.3.x alignment fallback...\n")
 				ver = 5300
 			} else {
 				break
@@ -113,17 +126,17 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		}
 
 		if EnableDebugLogging {
-			fmt.Printf("[DEBUG-POS] Position before Header: %d\n", r.Size() - int64(r.Len()))
+			logProgress("[DEBUG-POS] Position before Header: %d\n", r.Size() - int64(r.Len()))
 		}
 		var err error
 		parsedHeader, err = ReadRecord(r, headerSchema, isUnicode)
 		if EnableDebugLogging {
-			fmt.Printf("[DEBUG-POS] Position after Header: %d\n", r.Size() - int64(r.Len()))
+			logProgress("[DEBUG-POS] Position after Header: %d\n", r.Size() - int64(r.Len()))
 			pos := r.Size() - int64(r.Len())
 			if pos+64 <= int64(len(rawBytes1)) {
-				fmt.Printf("[DEBUG-HEX] Next 64 bytes: %x\n", rawBytes1[pos:pos+64])
+				logProgress("[DEBUG-HEX] Next 64 bytes: %x\n", rawBytes1[pos:pos+64])
 			} else {
-				fmt.Printf("[DEBUG-HEX] Next bytes: %x\n", rawBytes1[pos:])
+				logProgress("[DEBUG-HEX] Next bytes: %x\n", rawBytes1[pos:])
 			}
 		}
 		if err != nil {
@@ -132,9 +145,9 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		}
 
 		if EnableDebugLogging {
-			fmt.Printf("[DEBUG] Header WideStrings (%d): %+v\n", len(parsedHeader.WideStrings), parsedHeader.WideStrings)
-			fmt.Printf("[DEBUG] Header AnsiStrings (%d): %+v\n", len(parsedHeader.AnsiStrings), parsedHeader.AnsiStrings)
-			fmt.Printf("[DEBUG] Header Fields: %+v\n", parsedHeader.Fields)
+			logProgress("[DEBUG] Header WideStrings (%d): %+v\n", len(parsedHeader.WideStrings), parsedHeader.WideStrings)
+			logProgress("[DEBUG] Header AnsiStrings (%d): %+v\n", len(parsedHeader.AnsiStrings), parsedHeader.AnsiStrings)
+			logProgress("[DEBUG] Header Fields: %+v\n", parsedHeader.Fields)
 		}
 
 		// Self-Healing Heuristic Check: Check if UninstallDisplaySize is astronomically huge (e.g. > 10 Terabytes)
@@ -150,8 +163,8 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				displaySize = int64(v)
 			}
 			if displaySize > 10995116277760 || displaySize < 0 {
-				fmt.Printf("\n[!] FORENSIC HEURISTIC: Detected Version Spoofing via large uninstall size (%d bytes)!\n", displaySize)
-				fmt.Println("    Self-healing stream alignment in progress...")
+				logProgress("\n[!] FORENSIC HEURISTIC: Detected Version Spoofing via large uninstall size (%d bytes)!\n", displaySize)
+				logProgress("    Self-healing stream alignment in progress...\n")
 				ver = 5300
 				headerSchema, _ = GetRecordSchema(5300, "TSetupHeader", isUnicode)
 				parsedHeader, err = ReadRecord(r, headerSchema, isUnicode)
@@ -215,7 +228,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			}
 			for i := uint32(0); i < list.count; i++ {
 				if EnableDebugLogging {
-					fmt.Printf("[DEBUG-POS] Position before skipping %s item %d: %d\n", list.schema, i, r.Size() - int64(r.Len()))
+					logProgress("[DEBUG-POS] Position before skipping %s item %d: %d\n", list.schema, i, r.Size() - int64(r.Len()))
 				}
 				if _, err := ReadRecord(r, schema, isUnicode); err != nil {
 					debugPrintf("[DEBUG] Attempt %d: failed to skip list %s at item %d: %v\n", attempt, list.schema, i, err)
@@ -381,7 +394,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			}
 
 			if EnableDebugLogging && i < 5 {
-				fmt.Printf("[DEBUG-LOC] Location %d: %+v\n", i, rec.Fields)
+				logProgress("[DEBUG-LOC] Location %d: %+v\n", i, rec.Fields)
 			}
 
 			firstSlice := int32(rec.Fields["FirstSlice"].(uint32))
@@ -438,7 +451,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	}
 
 	if !success {
-		return 0, false, nil, nil, nil, nil, nil, errors.New("failed to parse Inno Setup catalog after all try-fallback attempts")
+		return 0, false, nil, nil, nil, nil, nil, CompressLZMA, errors.New("failed to parse Inno Setup catalog after all try-fallback attempts")
 	}
 
 	// Extract password fields for cracking propagation
@@ -460,12 +473,12 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	debugPrintf("    Locations:      %d\n", numLocations)
 	debugPrintf("    Runs:           %d\n\n", numRuns)
 
-	return ver, isUnicode, filesMetadata, locations, crypt64, passwordHash, passwordSalt, nil
+	return ver, isUnicode, filesMetadata, locations, crypt64, passwordHash, passwordSalt, returnedCompressMethod, nil
 }
 
 // ExtractAllFiles extracts every file from the installer executable.
 func ExtractAllFiles(exePath string, outDir string, password string) error {
-	ver, isUnicode, files, locations, crypt64, _, _, err := ListFilesAndLocations(exePath)
+	ver, isUnicode, files, locations, crypt64, _, _, compMethod, err := ListFilesAndLocations(exePath)
 	if err != nil {
 		return err
 	}
@@ -494,9 +507,16 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 			continue
 		}
 		loc := &locations[locIndex]
-		key := ChunkKey{loc.StartOffset, loc.ChunkCompressedSize}
+		key := ChunkKey{int32(loc.StartOffset), loc.ChunkCompressedSize}
 		chunkGroups[key] = append(chunkGroups[key], FileWithLoc{f, loc})
 	}
+
+	// Open the executable file once outside the loop
+	file, err := os.Open(exePath)
+	if err != nil {
+		return fmt.Errorf("failed to open executable: %w", err)
+	}
+	defer file.Close()
 
 	// 2. Process each unique chunk sequentially
 	for key, group := range chunkGroups {
@@ -505,26 +525,18 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 			return group[i].Loc.ChunkSuboffset < group[j].Loc.ChunkSuboffset
 		})
 
-		file, err := os.Open(exePath)
-		if err != nil {
-			return fmt.Errorf("failed to open executable: %w", err)
-		}
-
 		// Seek to chunk start offset
 		absOffset := table.Offset1 + int64(key.StartOffset)
 		if _, err := file.Seek(absOffset, io.SeekStart); err != nil {
-			file.Close()
 			return fmt.Errorf("failed to seek to chunk start: %w", err)
 		}
 
 		// Read and verify comp ID
 		var compID uint32
 		if err := binary.Read(file, binary.LittleEndian, &compID); err != nil {
-			file.Close()
 			return fmt.Errorf("failed to read comp ID: %w", err)
 		}
 		if compID != 0x1A626C7A {
-			file.Close()
 			return errors.New("invalid compression ID: source block is corrupted")
 		}
 
@@ -533,31 +545,26 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 		firstLoc := group[0].Loc
 		if hasFlag(firstLoc.Flags, 6) { // foChunkEncrypted
 			if password == "" {
-				file.Close()
 				return errors.New("file is encrypted but no password was specified")
 			}
 			if ver < 6400 {
 				salt := make([]byte, 8)
 				if _, err := io.ReadFull(file, salt); err != nil {
-					file.Close()
 					return fmt.Errorf("failed to read encryption salt: %w", err)
 				}
 				cipher, err := InitializeRC4Decryptor(password, salt, true, isUnicode)
 				if err != nil {
-					file.Close()
 					return fmt.Errorf("failed to initialize RC4 decryptor: %w", err)
 				}
 				rawReader = &DecryptReader{underlying: file, cipherRC4: cipher}
 			} else {
 				if crypt64 == nil {
-					file.Close()
 					return errors.New("missing v6 encryption configuration")
 				}
 				keyBytes := GenerateChaCha20Key(password, crypt64.KDFSalt, crypt64.KDFIterations)
 				nonce := RecreateChaCha20Nonce(crypt64.BaseNonce, int64(key.StartOffset), firstLoc.FirstSlice)
 				cipher, err := InitializeChaCha20Decryptor(keyBytes, nonce)
 				if err != nil {
-					file.Close()
 					return fmt.Errorf("failed to initialize ChaCha20 decryptor: %w", err)
 				}
 				rawReader = &DecryptReader{underlying: file, cipherCC20: cipher}
@@ -565,9 +572,8 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 		}
 
 		// Initialize Decompressor Stream
-		decompressor, err := NewDecompressor(rawReader, ActiveCompressMethod)
+		decompressor, err := NewDecompressor(rawReader, compMethod)
 		if err != nil {
-			file.Close()
 			return fmt.Errorf("failed to initialize decompressor: %w", err)
 		}
 
@@ -578,30 +584,30 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 			destPath := filepath.Join(outDir, cleanDest)
 
 			// Normalize filename display
-			fmt.Printf("Extracting: %-50s ... ", truncateFilename(item.File.DestName, 48))
+			logProgress("Extracting: %-50s ... ", truncateFilename(item.File.DestName, 48))
 
 			// Discard bytes to reach the ChunkSuboffset
 			diff := item.Loc.ChunkSuboffset - currentStreamPos
 			if diff > 0 {
 				if _, err := io.CopyN(io.Discard, decompressor, diff); err != nil {
-					fmt.Printf("FAILED (failed to skip %d bytes: %v)\n", diff, err)
+					logProgress("FAILED (failed to skip %d bytes: %v)\n", diff, err)
 					continue
 				}
 				currentStreamPos += diff
 			} else if diff < 0 {
-				fmt.Printf("FAILED (stream misalignment: current pos %d, target suboffset %d)\n", currentStreamPos, item.Loc.ChunkSuboffset)
+				logProgress("FAILED (stream misalignment: current pos %d, target suboffset %d)\n", currentStreamPos, item.Loc.ChunkSuboffset)
 				continue
 			}
 
 			// Extract file
 			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-				fmt.Printf("FAILED (failed to create dir: %v)\n", err)
+				logProgress("FAILED (failed to create dir: %v)\n", err)
 				continue
 			}
 
 			destFile, err := os.Create(destPath)
 			if err != nil {
-				fmt.Printf("FAILED (failed to create file: %v)\n", err)
+				logProgress("FAILED (failed to create file: %v)\n", err)
 				continue
 			}
 
@@ -616,7 +622,7 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 				}
 				n, rerr := io.ReadFull(decompressor, buf[:toRead])
 				if rerr != nil && rerr != io.ErrUnexpectedEOF && rerr != io.EOF {
-					fmt.Printf("FAILED (read error: %v)\n", rerr)
+					logProgress("FAILED (read error: %v)\n", rerr)
 					fileFailed = true
 					break
 				}
@@ -624,7 +630,7 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 					break
 				}
 				if _, werr := destFile.Write(buf[:n]); werr != nil {
-					fmt.Printf("FAILED (write error: %v)\n", werr)
+					logProgress("FAILED (write error: %v)\n", werr)
 					fileFailed = true
 					break
 				}
@@ -634,12 +640,11 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 			destFile.Close()
 
 			if !fileFailed {
-				fmt.Println("OK")
+				logProgress("OK\n")
 			}
 		}
 
 		decompressor.Close()
-		file.Close()
 	}
 
 	return nil
@@ -667,7 +672,7 @@ func cleanInnoPath(innoPath string) string {
 
 // ListFilesJSON returns the list of files in the installer as a JSON string.
 func ListFilesJSON(exePath string) (string, error) {
-	_, _, files, _, _, _, _, err := ListFilesAndLocations(exePath)
+	_, _, files, _, _, _, _, _, err := ListFilesAndLocations(exePath)
 	if err != nil {
 		return "", err
 	}
