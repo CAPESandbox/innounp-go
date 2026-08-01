@@ -123,3 +123,61 @@ func TestReadRecord_TruncatedStream_Failure(t *testing.T) {
 		t.Error("expected parsing failure due to truncated stream, but got success")
 	}
 }
+
+func TestGetRecordSchema_Version7000(t *testing.T) {
+	// Verify that the schema loads for Inno Setup 7.0 (v7000)
+	headerSchema, ok := GetRecordSchema(7000, "TSetupHeader", true)
+	if !ok {
+		t.Fatalf("failed to get schema for TSetupHeader under version 7000")
+	}
+
+	if headerSchema.NumWideStrings != 39 {
+		t.Errorf("expected 39 wide strings in v7000 TSetupHeader, got %d", headerSchema.NumWideStrings)
+	}
+
+	// Verify new field CompiledCodeVersion exists
+	foundCompiledCodeVersion := false
+	for _, field := range headerSchema.FixedFields {
+		if field.Name == "CompiledCodeVersion" {
+			foundCompiledCodeVersion = true
+			if field.Type != FieldInt32 || field.Size != 4 {
+				t.Errorf("CompiledCodeVersion field schema mismatch: expected Type=FieldInt32, Size=4, got Type=%v, Size=%d", field.Type, field.Size)
+			}
+		}
+	}
+	if !foundCompiledCodeVersion {
+		t.Errorf("CompiledCodeVersion field not found in v7000 TSetupHeader schema")
+	}
+
+	// Verify that the file entry schema has 15 wide strings, 1 ansi string, and verification fields
+	fileSchema, ok := GetRecordSchema(7000, "TSetupFileEntry", true)
+	if !ok {
+		t.Fatalf("failed to get schema for TSetupFileEntry under version 7000")
+	}
+
+	if fileSchema.NumWideStrings != 15 {
+		t.Errorf("expected 15 wide strings in v7000 TSetupFileEntry, got %d", fileSchema.NumWideStrings)
+	}
+	if fileSchema.NumAnsiStrings != 1 {
+		t.Errorf("expected 1 ansi string in v7000 TSetupFileEntry, got %d", fileSchema.NumAnsiStrings)
+	}
+
+	// Verify that the location entry has StartOffset as FieldInt64 (8 bytes)
+	locSchema, ok := GetRecordSchema(7000, "TSetupFileLocationEntry", true)
+	if !ok {
+		t.Fatalf("failed to get schema for TSetupFileLocationEntry under version 7000")
+	}
+
+	foundStartOffset := false
+	for _, field := range locSchema.FixedFields {
+		if field.Name == "StartOffset" {
+			foundStartOffset = true
+			if field.Type != FieldInt64 || field.Size != 8 {
+				t.Errorf("StartOffset field schema mismatch: expected Type=FieldInt64, Size=8, got Type=%v, Size=%d", field.Type, field.Size)
+			}
+		}
+	}
+	if !foundStartOffset {
+		t.Errorf("StartOffset field not found in v7000 TSetupFileLocationEntry schema")
+	}
+}

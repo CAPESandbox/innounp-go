@@ -115,7 +115,7 @@ type Is64EncryptionData struct {
 type UnifiedFileLocationEntry struct {
 	FirstSlice          int32
 	LastSlice           int32
-	StartOffset         int32
+	StartOffset         int64
 	ChunkSuboffset      int64
 	OriginalSize        int64
 	ChunkCompressedSize int64

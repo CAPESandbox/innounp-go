@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,8 +33,54 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to detect Inno Setup version: %w", err)
 	}
 
+	var crypt64 *Is64EncryptionData
+	setup0BlockOffset := table.Offset0 + 64
+
+	if ver >= 6500 {
+		// Seek to table.Offset0 + 64 (signature size is 64)
+		if _, err := file.Seek(table.Offset0+64, io.SeekStart); err != nil {
+			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to seek to encryption header: %w", err)
+		}
+
+		var encHeaderCRC uint32
+		if err := binary.Read(file, binary.LittleEndian, &encHeaderCRC); err != nil {
+			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to read encryption header CRC: %w", err)
+		}
+
+		var encHeader struct {
+			EncryptionUse uint8
+			KDFSalt       [16]byte
+			KDFIterations uint32
+			BaseNonce     [24]byte
+			PasswordTest  int32
+		}
+		if err := binary.Read(file, binary.LittleEndian, &encHeader); err != nil {
+			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to read encryption header: %w", err)
+		}
+
+		// Verify CRC of the encryption header bytes
+		var encBuf bytes.Buffer
+		binary.Write(&encBuf, binary.LittleEndian, &encHeader)
+		actualCRC := binary.LittleEndian.Uint32([]byte{0, 0, 0, 0}) // Just a dummy, let's compute real CRC!
+		_ = actualCRC
+		// Real CRC calculation via hash/crc32
+		actualCRC = crc32.ChecksumIEEE(encBuf.Bytes())
+		if actualCRC != encHeaderCRC {
+			return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("encryption header CRC mismatch (expected %08x, got %08x)", encHeaderCRC, actualCRC)
+		}
+
+		crypt64 = &Is64EncryptionData{
+			PasswordTest:  encHeader.PasswordTest,
+			KDFSalt:       encHeader.KDFSalt[:],
+			KDFIterations: int(encHeader.KDFIterations),
+			BaseNonce:     encHeader.BaseNonce[:],
+		}
+
+		setup0BlockOffset += 4 + 49
+	}
+
 	// Read block header for SETUP.0 Block 1
-	if _, err := file.Seek(table.Offset0+64, io.SeekStart); err != nil {
+	if _, err := file.Seek(setup0BlockOffset, io.SeekStart); err != nil {
 		return 0, false, nil, nil, nil, nil, nil, fmt.Errorf("failed to seek to SETUP.0 Block 1: %w", err)
 	}
 
@@ -61,7 +108,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	if err != nil {
 		// Fallback to LZMA2
 		decompressedBuf1.Reset()
-		if _, seekErr := file.Seek(table.Offset0+64, io.SeekStart); seekErr == nil {
+		if _, seekErr := file.Seek(setup0BlockOffset, io.SeekStart); seekErr == nil {
 			if blockHeader1Fallback, hdrErr := ReadBlockHeader(file, ver); hdrErr == nil {
 				if blockReader1Fallback, decErr := NewBlockReader(file, blockHeader1Fallback, CompressLZMA2); decErr == nil {
 					if _, copyErr := io.Copy(&decompressedBuf1, blockReader1Fallback); copyErr == nil {
@@ -81,7 +128,6 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	// State variables extracted sequentially
 	var parsedHeader *ParsedRecord
 	var numLanguages, numMessages, numPermissions, numTypes, numComponents, numTasks, numDirs, numFiles, numLocations, numIcons, numInis, numRegs, numDeletes, numRuns uint32
-	var crypt64 *Is64EncryptionData
 	var filesMetadata []FileMetadata
 	var locations []UnifiedFileLocationEntry
 	var locationIndices []int32
@@ -159,14 +205,16 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		numRuns = getIntField(parsedHeader.Fields, "NumRunEntries") + getIntField(parsedHeader.Fields, "NumUninstallRunEntries")
 
 		// Extract encryption configuration (if v6+)
-		crypt64 = nil
-		if ver >= 6400 {
-			if passTestVal, ok := parsedHeader.Fields["PasswordTest"]; ok {
-				crypt64 = &Is64EncryptionData{
-					PasswordTest:  int32(passTestVal.(uint32)),
-					KDFSalt:       parsedHeader.Fields["EncryptionKDFSalt"].([]byte),
-					KDFIterations: int(parsedHeader.Fields["EncryptionKDFIterations"].(uint32)),
-					BaseNonce:     parsedHeader.Fields["EncryptionBaseNonce"].([]byte),
+		if ver < 6500 {
+			crypt64 = nil
+			if ver >= 6400 {
+				if passTestVal, ok := parsedHeader.Fields["PasswordTest"]; ok {
+					crypt64 = &Is64EncryptionData{
+						PasswordTest:  int32(passTestVal.(uint32)),
+						KDFSalt:       parsedHeader.Fields["EncryptionKDFSalt"].([]byte),
+						KDFIterations: int(parsedHeader.Fields["EncryptionKDFIterations"].(uint32)),
+						BaseNonce:     parsedHeader.Fields["EncryptionBaseNonce"].([]byte),
+					}
 				}
 			}
 		}
@@ -315,7 +363,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		// Seek to raw EXE Block 2 (Locations Block) containing TSetupFileLocationEntry records.
 		// Block 2 starts exactly after Block 1's compressed data (signature size + block header + compressed size).
 		// If there is no separate Block 2 (such as in mock tests), we read from Block 1 directly.
-		block2Offset := table.Offset0 + 64 + 9 + int64(blockHeader1.StoredSize)
+		block2Offset := setup0BlockOffset + 9 + int64(blockHeader1.StoredSize)
 
 		var locReader io.Reader = r
 		var fileSize int64 = 0
@@ -358,7 +406,17 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 
 			firstSlice := int32(rec.Fields["FirstSlice"].(uint32))
 			lastSlice := int32(rec.Fields["LastSlice"].(uint32))
-			startOffset := int32(rec.Fields["StartOffset"].(uint32))
+			
+			var startOffset int64
+			if sVal, exists := rec.Fields["StartOffset"]; exists {
+				switch v := sVal.(type) {
+				case uint32:
+					startOffset = int64(v)
+				case int64:
+					startOffset = v
+				}
+			}
+
 			chunkSuboffset := rec.Fields["ChunkSuboffset"].(int64)
 			originalSize := rec.Fields["OriginalSize"].(int64)
 			chunkCompressedSize := rec.Fields["ChunkCompressedSize"].(int64)
@@ -547,8 +605,13 @@ func DecompileInnoExe(exePath string) (string, error) {
 		return "", fmt.Errorf("failed to detect Inno version: %w", err)
 	}
 
+	setup0BlockOffset := table.Offset0 + 64
+	if ver >= 6500 {
+		setup0BlockOffset += 4 + 49
+	}
+
 	// Read block header for SETUP.0
-	if _, err := file.Seek(table.Offset0+64, io.SeekStart); err != nil {
+	if _, err := file.Seek(setup0BlockOffset, io.SeekStart); err != nil {
 		return "", err
 	}
 	blockHeader, err := ReadBlockHeader(file, ver)

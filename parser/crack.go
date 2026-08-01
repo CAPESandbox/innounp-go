@@ -45,7 +45,11 @@ func CrackPassword(exePath string, wordlist []string) (*PasswordCrackResult, err
 	}
 
 	headerSchema, _ := GetRecordSchema(ver, "TSetupHeader", isUnicode)
-	if _, err := file.Seek(table.Offset0+64, ioSeekStart); err != nil {
+	setup0BlockOffset := table.Offset0 + 64
+	if ver >= 6500 {
+		setup0BlockOffset += 4 + 49
+	}
+	if _, err := file.Seek(setup0BlockOffset, ioSeekStart); err != nil {
 		return nil, err
 	}
 	blockHeader, err := ReadBlockHeader(file, ver)
