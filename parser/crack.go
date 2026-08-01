@@ -22,7 +22,7 @@ type PasswordCrackResult struct {
 // from the compiled Pascal Script bytecode (if present), and runs a parallel dictionary attack.
 func CrackPassword(exePath string, wordlist []string) (*PasswordCrackResult, error) {
 	// 1. Retrieve the file schemas and parse counts
-	ver, isUnicode, _, _, crypt64, expectedHash, salt, err := ListFilesAndLocations(exePath)
+	ver, isUnicode, _, _, crypt64, expectedHash, salt, _, err := ListFilesAndLocations(exePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse installer blocks: %w", err)
 	}

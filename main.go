@@ -104,7 +104,7 @@ func main() {
 	}
 
 	// 2. Parse file lists and locations
-	ver, isUnicode, files, locations, crypt64, _, _, err := parser.ListFilesAndLocations(filePath)
+	ver, isUnicode, files, locations, crypt64, _, _, _, err := parser.ListFilesAndLocations(filePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing installer block: %v\n", err)
 		os.Exit(1)
@@ -117,8 +117,22 @@ func main() {
 
 	// 3. Coordinate Multi-Threaded Password Recovery (Forensics / Sandbox Cracker)
 	pass := *password
-	if *crack || *wordlistFile != "" {
-		fmt.Println("Initiating Multi-Core Parallel Password Recovery...")
+	hasEncryptedFiles := false
+	for _, f := range files {
+		if f.Encrypted {
+			hasEncryptedFiles = true
+			break
+		}
+	}
+
+	shouldCrack := *crack || *wordlistFile != "" || (hasEncryptedFiles && pass == "")
+	if shouldCrack {
+		if hasEncryptedFiles && pass == "" && !*crack && *wordlistFile == "" {
+			fmt.Println("[!] FORENSIC ALERT: Encrypted files detected but no password was specified!")
+			fmt.Println("    Automatically initiating parallel password recovery...")
+		} else {
+			fmt.Println("Initiating Multi-Core Parallel Password Recovery...")
+		}
 		var list []string
 		if *wordlistFile != "" {
 			var err error
@@ -226,11 +240,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	err = parser.ExtractAllFiles(filePath, destDir, pass)
+	sCount, fCount, bytesExtracted, err := parser.ExtractAllFiles(filePath, destDir, pass)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error during extraction: %v\n", err)
 		os.Exit(1)
 	}
+	successCount += sCount
+	failCount += fCount
+	totalBytesExtracted += bytesExtracted
 
 	// Forensic Recovery Loop: Extract hidden unmapped payload locations directly (Defeating Evasion Tactics)
 	if len(locations) > len(files) {

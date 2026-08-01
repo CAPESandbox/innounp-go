@@ -342,7 +342,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				}
 			}
 			compressMethod := getIntField(parsedHeader.Fields, "CompressMethod")
-			ActiveCompressMethod = SetupCompressMethod(compressMethod)
+			returnedCompressMethod = SetupCompressMethod(compressMethod)
 			if err := skipDecompDll(r, ver, uint8(compressMethod)); err != nil {
 				debugPrintf("[DEBUG] Attempt %d: failed to skip Decompressor DLL: %v\n", attempt, err)
 				continue
@@ -477,16 +477,19 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 }
 
 // ExtractAllFiles extracts every file from the installer executable.
-func ExtractAllFiles(exePath string, outDir string, password string) error {
+func ExtractAllFiles(exePath string, outDir string, password string) (int, int, int64, error) {
 	ver, isUnicode, files, locations, crypt64, _, _, compMethod, err := ListFilesAndLocations(exePath)
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
 
 	table, err := ParseSetupLdr(exePath)
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
+
+	var successCount, failCount int
+	var totalBytesExtracted int64
 
 	// 1. Group files by their location chunk (StartOffset + ChunkCompressedSize)
 	type ChunkKey struct {
@@ -514,7 +517,7 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 	// Open the executable file once outside the loop
 	file, err := os.Open(exePath)
 	if err != nil {
-		return fmt.Errorf("failed to open executable: %w", err)
+		return 0, 0, 0, fmt.Errorf("failed to open executable: %w", err)
 	}
 	defer file.Close()
 
@@ -528,16 +531,16 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 		// Seek to chunk start offset
 		absOffset := table.Offset1 + int64(key.StartOffset)
 		if _, err := file.Seek(absOffset, io.SeekStart); err != nil {
-			return fmt.Errorf("failed to seek to chunk start: %w", err)
+			return 0, 0, 0, fmt.Errorf("failed to seek to chunk start: %w", err)
 		}
 
 		// Read and verify comp ID
 		var compID uint32
 		if err := binary.Read(file, binary.LittleEndian, &compID); err != nil {
-			return fmt.Errorf("failed to read comp ID: %w", err)
+			return 0, 0, 0, fmt.Errorf("failed to read comp ID: %w", err)
 		}
 		if compID != 0x1A626C7A {
-			return errors.New("invalid compression ID: source block is corrupted")
+			return 0, 0, 0, errors.New("invalid compression ID: source block is corrupted")
 		}
 
 		// Setup Decryption Reader
@@ -545,27 +548,27 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 		firstLoc := group[0].Loc
 		if hasFlag(firstLoc.Flags, 6) { // foChunkEncrypted
 			if password == "" {
-				return errors.New("file is encrypted but no password was specified")
+				return 0, 0, 0, errors.New("file is encrypted but no password was specified")
 			}
 			if ver < 6400 {
 				salt := make([]byte, 8)
 				if _, err := io.ReadFull(file, salt); err != nil {
-					return fmt.Errorf("failed to read encryption salt: %w", err)
+					return 0, 0, 0, fmt.Errorf("failed to read encryption salt: %w", err)
 				}
 				cipher, err := InitializeRC4Decryptor(password, salt, true, isUnicode)
 				if err != nil {
-					return fmt.Errorf("failed to initialize RC4 decryptor: %w", err)
+					return 0, 0, 0, fmt.Errorf("failed to initialize RC4 decryptor: %w", err)
 				}
 				rawReader = &DecryptReader{underlying: file, cipherRC4: cipher}
 			} else {
 				if crypt64 == nil {
-					return errors.New("missing v6 encryption configuration")
+					return 0, 0, 0, errors.New("missing v6 encryption configuration")
 				}
 				keyBytes := GenerateChaCha20Key(password, crypt64.KDFSalt, crypt64.KDFIterations)
 				nonce := RecreateChaCha20Nonce(crypt64.BaseNonce, int64(key.StartOffset), firstLoc.FirstSlice)
 				cipher, err := InitializeChaCha20Decryptor(keyBytes, nonce)
 				if err != nil {
-					return fmt.Errorf("failed to initialize ChaCha20 decryptor: %w", err)
+					return 0, 0, 0, fmt.Errorf("failed to initialize ChaCha20 decryptor: %w", err)
 				}
 				rawReader = &DecryptReader{underlying: file, cipherCC20: cipher}
 			}
@@ -574,7 +577,7 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 		// Initialize Decompressor Stream
 		decompressor, err := NewDecompressor(rawReader, compMethod)
 		if err != nil {
-			return fmt.Errorf("failed to initialize decompressor: %w", err)
+			return 0, 0, 0, fmt.Errorf("failed to initialize decompressor: %w", err)
 		}
 
 		// Process files sequentially in single-pass
@@ -591,23 +594,27 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 			if diff > 0 {
 				if _, err := io.CopyN(io.Discard, decompressor, diff); err != nil {
 					logProgress("FAILED (failed to skip %d bytes: %v)\n", diff, err)
+					failCount++
 					continue
 				}
 				currentStreamPos += diff
 			} else if diff < 0 {
 				logProgress("FAILED (stream misalignment: current pos %d, target suboffset %d)\n", currentStreamPos, item.Loc.ChunkSuboffset)
+				failCount++
 				continue
 			}
 
 			// Extract file
 			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 				logProgress("FAILED (failed to create dir: %v)\n", err)
+				failCount++
 				continue
 			}
 
 			destFile, err := os.Create(destPath)
 			if err != nil {
 				logProgress("FAILED (failed to create file: %v)\n", err)
+				failCount++
 				continue
 			}
 
@@ -641,13 +648,17 @@ func ExtractAllFiles(exePath string, outDir string, password string) error {
 
 			if !fileFailed {
 				logProgress("OK\n")
+				successCount++
+				totalBytesExtracted += item.File.OriginalSize
+			} else {
+				failCount++
 			}
 		}
 
 		decompressor.Close()
 	}
 
-	return nil
+	return successCount, failCount, totalBytesExtracted, nil
 }
 
 // cleanInnoPath replaces custom Inno path constants like "{app}" with standard folders.
