@@ -1,5 +1,7 @@
 package parser
 
+import "fmt"
+
 // FieldType defines the serialization type of a binary field.
 type FieldType int
 
@@ -224,7 +226,6 @@ func init() {
 				{"MinVersion", FieldBytes, 10},
 				{"OnlyBelowVersion", FieldBytes, 10},
 				{"Type", FieldEnum, 1},
-				{"Options", FieldBitset, 4},
 			},
 		},
 		"TSetupRunEntry": {
@@ -316,7 +317,7 @@ func init() {
 		},
 		"TSetupIni": SchemaRegistry[5300]["TSetupIniEntry"],
 		"TSetupRegistryEntry": {
-			NumWideStrings: 12, // 12 WideStrings in v5500!
+			NumWideStrings: 9, // Corrected to 9 strings (key, name, value + 6 condition strings)
 			NumAnsiStrings: 0,
 			FixedFields: []FieldSchema{
 				{"MinVersion", FieldBytes, 10},
@@ -333,7 +334,6 @@ func init() {
 				{"MinVersion", FieldBytes, 10},
 				{"OnlyBelowVersion", FieldBytes, 10},
 				{"Type", FieldEnum, 1},
-				{"Options", FieldBitset, 4},
 			},
 		},
 		"TSetupRunEntry": SchemaRegistry[5300]["TSetupRunEntry"],
@@ -378,7 +378,7 @@ func init() {
 		},
 		"TSetupFileEntry": {
 			NumWideStrings: 0,
-			NumAnsiStrings: 3, // only SourceFilename, DestName, InstallFontName in v1
+			NumAnsiStrings: 2, // only SourceFilename, DestName in v1
 			FixedFields: []FieldSchema{
 				{"MinVersion", FieldBytes, 10},
 				{"OnlyBelowVersion", FieldBytes, 10},
@@ -388,6 +388,7 @@ func init() {
 				{"CopyMode", FieldEnum, 1},
 				{"Options", FieldBitset, 4},
 				{"FileType", FieldEnum, 1},
+				{"Padding", FieldBytes, 2},
 			},
 		},
 		"TSetupFileLocationEntry": {
@@ -402,6 +403,58 @@ func init() {
 				{"TimeStamp", FieldBytes, 8},
 				{"FileVersionMS", FieldInt32, 4},
 				{"FileVersionLS", FieldInt32, 4},
+				{"Flags", FieldBitset, 1},
+			},
+		},
+		"TSetupIconEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 4, // 4 strings in v1 (no Comment/tooltip)
+			FixedFields: []FieldSchema{
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"IconIndex", FieldInt32, 4},
+				{"ShowCmd", FieldInt32, 4},
+				{"CloseOnExit", FieldInt16, 2},
+				{"Flags", FieldBitset, 4},
+			},
+		},
+		"TSetupIniEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 4,
+			FixedFields: []FieldSchema{
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"Flags", FieldBitset, 4},
+			},
+		},
+		"TSetupRegistryEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 3,
+			FixedFields: []FieldSchema{
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"RootKey", FieldInt32, 4},
+				{"Typ", FieldInt16, 2},
+				{"Flags", FieldBitset, 4},
+			},
+		},
+		"TSetupDeleteEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 1,
+			FixedFields: []FieldSchema{
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"Type", FieldEnum, 4},
+			},
+		},
+		"TSetupRunEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 5,
+			FixedFields: []FieldSchema{
+				{"MinVersion", FieldBytes, 10},
+				{"OnlyBelowVersion", FieldBytes, 10},
+				{"ShowCmd", FieldInt32, 4},
+				{"Wait", FieldEnum, 1},
 				{"Flags", FieldBitset, 4},
 			},
 		},
@@ -442,15 +495,15 @@ func init() {
 				{"Options", FieldBitset, 5},
 			},
 		},
-		"TSetupLanguageEntry":     SchemaRegistry[2000]["TSetupLanguageEntry"],
-		"TSetupCustomMessageEntry": SchemaRegistry[2000]["TSetupCustomMessageEntry"],
-		"TSetupPermissionEntry":    SchemaRegistry[2000]["TSetupPermissionEntry"],
-		"TSetupTypeEntry":          SchemaRegistry[2000]["TSetupTypeEntry"],
-		"TSetupComponentEntry":     SchemaRegistry[2000]["TSetupComponentEntry"],
-		"TSetupTaskEntry":          SchemaRegistry[2000]["TSetupTaskEntry"],
-		"TSetupDirEntry":           SchemaRegistry[2000]["TSetupDirEntry"],
-		"TSetupFileEntry":          SchemaRegistry[2000]["TSetupFileEntry"],
-		"TSetupFileLocationEntry":  SchemaRegistry[2000]["TSetupFileLocationEntry"],
+		"TSetupLanguageEntry":     SchemaRegistry[1000]["TSetupLanguageEntry"],
+		"TSetupCustomMessageEntry": SchemaRegistry[1000]["TSetupCustomMessageEntry"],
+		"TSetupPermissionEntry":    SchemaRegistry[1000]["TSetupPermissionEntry"],
+		"TSetupTypeEntry":          SchemaRegistry[1000]["TSetupTypeEntry"],
+		"TSetupComponentEntry":     SchemaRegistry[1000]["TSetupComponentEntry"],
+		"TSetupTaskEntry":          SchemaRegistry[1000]["TSetupTaskEntry"],
+		"TSetupDirEntry":           SchemaRegistry[1000]["TSetupDirEntry"],
+		"TSetupFileEntry":          SchemaRegistry[1000]["TSetupFileEntry"],
+		"TSetupFileLocationEntry":  SchemaRegistry[1000]["TSetupFileLocationEntry"],
 	}
 
 	// Initialize Schema Registry for Inno Setup 3.x (v3000 series)
@@ -490,15 +543,15 @@ func init() {
 				{"Options", FieldBitset, 5},
 			},
 		},
-		"TSetupLanguageEntry":     SchemaRegistry[3000]["TSetupLanguageEntry"],
-		"TSetupCustomMessageEntry": SchemaRegistry[3000]["TSetupCustomMessageEntry"],
-		"TSetupPermissionEntry":    SchemaRegistry[3000]["TSetupPermissionEntry"],
-		"TSetupTypeEntry":          SchemaRegistry[3000]["TSetupTypeEntry"],
-		"TSetupComponentEntry":     SchemaRegistry[3000]["TSetupComponentEntry"],
-		"TSetupTaskEntry":          SchemaRegistry[3000]["TSetupTaskEntry"],
-		"TSetupDirEntry":           SchemaRegistry[3000]["TSetupDirEntry"],
-		"TSetupFileEntry":          SchemaRegistry[3000]["TSetupFileEntry"],
-		"TSetupFileLocationEntry":  SchemaRegistry[3000]["TSetupFileLocationEntry"],
+		"TSetupLanguageEntry":     SchemaRegistry[2000]["TSetupLanguageEntry"],
+		"TSetupCustomMessageEntry": SchemaRegistry[2000]["TSetupCustomMessageEntry"],
+		"TSetupPermissionEntry":    SchemaRegistry[2000]["TSetupPermissionEntry"],
+		"TSetupTypeEntry":          SchemaRegistry[2000]["TSetupTypeEntry"],
+		"TSetupComponentEntry":     SchemaRegistry[2000]["TSetupComponentEntry"],
+		"TSetupTaskEntry":          SchemaRegistry[2000]["TSetupTaskEntry"],
+		"TSetupDirEntry":           SchemaRegistry[2000]["TSetupDirEntry"],
+		"TSetupFileEntry":          SchemaRegistry[2000]["TSetupFileEntry"],
+		"TSetupFileLocationEntry":  SchemaRegistry[2000]["TSetupFileLocationEntry"],
 	}
 
 	// Initialize Schema Registry for Inno Setup 4.x (v4000 series)
@@ -539,15 +592,15 @@ func init() {
 				{"Options", FieldBitset, 5},
 			},
 		},
-		"TSetupLanguageEntry":     SchemaRegistry[4000]["TSetupLanguageEntry"],
-		"TSetupCustomMessageEntry": SchemaRegistry[4000]["TSetupCustomMessageEntry"],
-		"TSetupPermissionEntry":    SchemaRegistry[4000]["TSetupPermissionEntry"],
-		"TSetupTypeEntry":          SchemaRegistry[4000]["TSetupTypeEntry"],
-		"TSetupComponentEntry":     SchemaRegistry[4000]["TSetupComponentEntry"],
-		"TSetupTaskEntry":          SchemaRegistry[4000]["TSetupTaskEntry"],
-		"TSetupDirEntry":           SchemaRegistry[4000]["TSetupDirEntry"],
-		"TSetupFileEntry":          SchemaRegistry[4000]["TSetupFileEntry"],
-		"TSetupFileLocationEntry":  SchemaRegistry[4000]["TSetupFileLocationEntry"],
+		"TSetupLanguageEntry":     SchemaRegistry[3000]["TSetupLanguageEntry"],
+		"TSetupCustomMessageEntry": SchemaRegistry[3000]["TSetupCustomMessageEntry"],
+		"TSetupPermissionEntry":    SchemaRegistry[3000]["TSetupPermissionEntry"],
+		"TSetupTypeEntry":          SchemaRegistry[3000]["TSetupTypeEntry"],
+		"TSetupComponentEntry":     SchemaRegistry[3000]["TSetupComponentEntry"],
+		"TSetupTaskEntry":          SchemaRegistry[3000]["TSetupTaskEntry"],
+		"TSetupDirEntry":           SchemaRegistry[3000]["TSetupDirEntry"],
+		"TSetupFileEntry":          SchemaRegistry[3000]["TSetupFileEntry"],
+		"TSetupFileLocationEntry":  SchemaRegistry[3000]["TSetupFileLocationEntry"],
 	}
 
 	// Initialize Schema Registry for Inno Setup 5.1.0/5.2.0 (v5100 series)
@@ -994,22 +1047,106 @@ func GetRecordSchema(ver int, recordName string, isUnicode bool) (RecordSchema, 
 	var schema RecordSchema
 	var found bool
 
-	// Exact version check
-	if records, ok := SchemaRegistry[ver]; ok {
+	// If ver == 5501, use 5500 schema fallback for all records except TSetupHeader
+	lookupVer := ver
+	if ver == 5501 {
+		lookupVer = 5500
+	}
+
+	// 1. First, check if there is an exact match for this version in SchemaRegistry
+	if records, ok := SchemaRegistry[lookupVer]; ok {
 		if schema, found = records[recordName]; found {
+			return applyAnsiSchemaOverrides(schema, recordName, lookupVer, isUnicode), true
+		}
+	}
+
+	// 2. Second, try dynamic generation for headers and specific drifted entities
+	if ver >= 5000 {
+		if recordName == "TSetupHeader" {
+			schema = GetDynamicSetupHeaderSchema(ver)
+			return applyAnsiSchemaOverrides(schema, recordName, ver, isUnicode), true
+		}
+
+		if recordName == "TSetupLanguageEntry" {
+			numWide := 10
+			numAnsi := 0
+			if ver < 4000 {
+				numWide = 2
+			} else if ver < 4001 {
+				numWide = 7
+			} else if ver >= 6600 {
+				numWide = 8
+			}
+
+			fields := []FieldSchema{}
+			if ver >= 6600 {
+				fields = append(fields, FieldSchema{"LanguageID", FieldInt16, 2})
+			} else {
+				fields = append(fields, FieldSchema{"LanguageID", FieldInt32, 4})
+			}
+
+			// Codepage / Dummy field:
+			// - If ANSI (not Unicode): stored if ver >= 4202
+			// - If Unicode: stored as a dummy if ver >= 4202 && ver < 5200
+			hasCodepage := false
+			if !isUnicode && ver >= 4202 {
+				hasCodepage = true
+			} else if isUnicode && ver >= 4202 && ver < 5200 {
+				hasCodepage = true
+			}
+			if hasCodepage {
+				fields = append(fields, FieldSchema{"LanguageCodePage", FieldInt32, 4})
+			}
+
+			fields = append(fields, FieldSchema{"DialogFontSize", FieldInt32, 4})
+
+			if ver < 4100 {
+				fields = append(fields, FieldSchema{"DialogFontStandardHeight", FieldInt32, 4})
+			}
+
+			if ver >= 6600 {
+				fields = append(fields, FieldSchema{"DialogFontBaseScaleHeight", FieldInt32, 4})
+				fields = append(fields, FieldSchema{"DialogFontBaseScaleWidth", FieldInt32, 4})
+			} else {
+				fields = append(fields, FieldSchema{"TitleFontSize", FieldInt32, 4})
+			}
+
+			fields = append(fields, FieldSchema{"WelcomeFontSize", FieldInt32, 4})
+
+			if ver < 6600 {
+				fields = append(fields, FieldSchema{"CopyrightFontSize", FieldInt32, 4})
+			}
+
+			if ver >= 5203 {
+				fields = append(fields, FieldSchema{"RightToLeft", FieldInt8, 1})
+			}
+
+			schema = RecordSchema{
+				NumWideStrings: numWide,
+				NumAnsiStrings: numAnsi,
+				FixedFields:    fields,
+			}
+			if EnableDebugLogging {
+				fmt.Printf("[DEBUG-LANG] TSetupLanguageEntry ver=%d, NumWideStrings=%d, FixedFields len=%d: %+v\n", ver, numWide, len(fields), fields)
+			}
+			return applyAnsiSchemaOverrides(schema, recordName, ver, isUnicode), true
+		}
+
+		if recordName == "TSetupFileLocationEntry" && ver < 6300 {
+			schema = SchemaRegistry[5500]["TSetupFileLocationEntry"]
 			return applyAnsiSchemaOverrides(schema, recordName, ver, isUnicode), true
 		}
 	}
 
-	// Fallback to exact major-hundreds block (e.g. 5205 -> 5200)
-	majorHundreds := (ver / 100) * 100
+	// 3. Third, check majorHundreds (e.g., 5402 -> 5400) fallback in SchemaRegistry
+	majorHundreds := (lookupVer / 100) * 100
 	if records, ok := SchemaRegistry[majorHundreds]; ok {
 		if schema, found = records[recordName]; found {
-			return applyAnsiSchemaOverrides(schema, recordName, ver, isUnicode), true
+			return applyAnsiSchemaOverrides(schema, recordName, lookupVer, isUnicode), true
 		}
 	}
 
-	// Fallback to exact major-thousands block (e.g. 1321 -> 1000, 4107 -> 4000, 5500 -> 5000)
+	// 4. Fallback to exact major-thousands block (e.g. 1321 -> 1000, 4107 -> 4000, 5500 -> 5000)
 	majorThousands := (ver / 1000) * 1000
 	if records, ok := SchemaRegistry[majorThousands]; ok {
 		if schema, found = records[recordName]; found {
@@ -1017,7 +1154,7 @@ func GetRecordSchema(ver int, recordName string, isUnicode bool) (RecordSchema, 
 		}
 	}
 
-	// Universal fallback
+	// 5. Universal fallback (5500)
 	if records, ok := SchemaRegistry[5500]; ok {
 		if schema, found = records[recordName]; found {
 			return applyAnsiSchemaOverrides(schema, recordName, ver, isUnicode), true
@@ -1036,6 +1173,11 @@ func applyAnsiSchemaOverrides(schema RecordSchema, recordName string, ver int, i
 	copy(schema.FixedFields, oldFields)
 
 	if isUnicode {
+		// In a Unicode installer, ALL strings are WideStrings EXCEPT for TSetupHeader's ansi strings!
+		if recordName != "TSetupHeader" {
+			schema.NumWideStrings = schema.NumWideStrings + schema.NumAnsiStrings
+			schema.NumAnsiStrings = 0
+		}
 		return schema
 	}
 
@@ -1043,8 +1185,8 @@ func applyAnsiSchemaOverrides(schema RecordSchema, recordName string, ver int, i
 	schema.NumAnsiStrings = schema.NumWideStrings + schema.NumAnsiStrings
 	schema.NumWideStrings = 0
 
-	// 2. Prepend LeadBytes (32 bytes) to TSetupHeader if missing
-	if recordName == "TSetupHeader" {
+	// 2. Prepend LeadBytes (32 bytes) to TSetupHeader if missing (only for Inno Setup 2.0.0+)
+	if recordName == "TSetupHeader" && ver >= 2000 {
 		hasLeadBytes := false
 		for _, f := range schema.FixedFields {
 			if f.Name == "LeadBytes" {
@@ -1075,4 +1217,249 @@ func applyAnsiSchemaOverrides(schema RecordSchema, recordName string, ver int, i
 	}
 
 	return schema
+}
+
+// GetHeaderStringCounts returns the correct (NumWideStrings, NumAnsiStrings) for TSetupHeader
+func GetHeaderStringCounts(ver int) (int, int) {
+	// For version >= 5000 (Unicode era), we start with a base of 23 WideStrings and 4 AnsiStrings.
+	numWide := 23
+	numAnsi := 4
+
+	// 2. CreateUninstallRegKey added in 5.3.8
+	if ver >= 5308 {
+		numWide++
+	}
+	// 3. Uninstallable added in 5.3.10
+	if ver >= 5310 {
+		numWide++
+	}
+	// 4. CloseApplicationsFilter added in 5.5.0
+	if ver >= 5500 {
+		numWide++
+	}
+	// 5. SetupMutex added in 5.5.6
+	if ver >= 5506 {
+		numWide++
+	}
+	// 6. ChangesEnvironment, ChangesAssociations added in 5.6.1
+	if ver >= 5601 {
+		numWide += 2
+	}
+	// 7. ArchitecturesAllowed, Architectures64bit added in 6.0.0
+	if ver >= 6000 {
+		numWide += 2
+	}
+	// 8. CloseApplicationsFilterExcludes added in 6.3.0
+	if ver >= 6300 {
+		numWide++
+	}
+	// 9. SevenZipLibraryName added in 6.4.2
+	if ver >= 6402 {
+		numWide++
+	}
+	// 10. UsePreviousAppDir, UsePreviousGroup, UsePreviousSetupType, UsePreviousTasks, UsePreviousUserInfo added in 6.7.0
+	if ver >= 6700 {
+		numWide += 5
+	}
+
+	// Add compiled_code if >= 5.2.5
+	if ver >= 5205 {
+		numWide++
+	}
+
+	// Add uninstaller_signature if >= 5.2.1 && < 5.3.10
+	if ver >= 5201 && ver < 5310 {
+		numWide++
+	}
+
+	return numWide, numAnsi
+}
+
+// GetDynamicSetupHeaderSchema dynamically constructs the exact RecordSchema for TSetupHeader
+func GetDynamicSetupHeaderSchema(ver int) RecordSchema {
+	numWide, numAnsi := GetHeaderStringCounts(ver)
+
+	fields := []FieldSchema{}
+
+	// Add Num*Entries counts
+	if ver >= 4000 {
+		fields = append(fields, FieldSchema{"NumLanguageEntries", FieldInt32, 4})
+	}
+	if ver >= 4201 {
+		fields = append(fields, FieldSchema{"NumCustomMessageEntries", FieldInt32, 4})
+	}
+	if ver >= 4100 {
+		fields = append(fields, FieldSchema{"NumPermissionEntries", FieldInt32, 4})
+	}
+	if ver >= 2000 {
+		fields = append(fields, FieldSchema{"NumTypeEntries", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"NumComponentEntries", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"NumTaskEntries", FieldInt32, 4})
+	}
+
+	fields = append(fields, FieldSchema{"NumDirEntries", FieldInt32, 4})
+
+	if ver >= 6500 {
+		fields = append(fields, FieldSchema{"NumISSigKeyEntries", FieldInt32, 4})
+	}
+
+	fields = append(fields, FieldSchema{"NumFileEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumFileLocationEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumIconEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumIniEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumRegistryEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumInstallDeleteEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumUninstallDeleteEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumRunEntries", FieldInt32, 4})
+	fields = append(fields, FieldSchema{"NumUninstallRunEntries", FieldInt32, 4})
+
+	if ver >= 7000 {
+		fields = append(fields, FieldSchema{"CompiledCodeVersion", FieldInt32, 4})
+	}
+
+	// MinVersion & OnlyBelowVersion
+	fields = append(fields, FieldSchema{"MinVersion", FieldBytes, 10})
+	fields = append(fields, FieldSchema{"OnlyBelowVersion", FieldBytes, 10})
+
+	// Colors
+	if ver < 6401 {
+		fields = append(fields, FieldSchema{"BackColor", FieldInt32, 4})
+	}
+	if ver >= 1303 && ver < 6401 {
+		fields = append(fields, FieldSchema{"BackColor2", FieldInt32, 4})
+	}
+	if ver < 5507 {
+		fields = append(fields, FieldSchema{"WizardImageBackColor", FieldInt32, 4})
+	}
+	if ver >= 2000 && ver < 5004 {
+		fields = append(fields, FieldSchema{"WizardSmallImageBackColor", FieldInt32, 4})
+	}
+
+	// Wizard Layout
+	if ver >= 6600 {
+		fields = append(fields, FieldSchema{"WizardSizePercentX", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"WizardSizePercentY", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"WizardDarkStyle", FieldEnum, 1})
+	} else if ver >= 6000 {
+		fields = append(fields, FieldSchema{"WizardStyle", FieldEnum, 1})
+		fields = append(fields, FieldSchema{"WizardSizePercentX", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"WizardSizePercentY", FieldInt32, 4})
+	}
+
+	if ver >= 5507 {
+		fields = append(fields, FieldSchema{"WizardImageAlphaFormat", FieldEnum, 1})
+	}
+
+	if ver >= 6502 {
+		fields = append(fields, FieldSchema{"WizardImageBackColor", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"WizardSmallImageBackColor", FieldInt32, 4})
+	}
+	if ver >= 6700 {
+		fields = append(fields, FieldSchema{"WizardBackColor", FieldInt32, 4})
+	}
+	if ver >= 6600 {
+		fields = append(fields, FieldSchema{"WizardImageBackColorDynamicDark", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"WizardSmallImageBackColorDynamicDark", FieldInt32, 4})
+	}
+	if ver >= 6700 {
+		fields = append(fields, FieldSchema{"WizardBackColorDynamicDark", FieldInt32, 4})
+	}
+	if ver >= 6601 {
+		fields = append(fields, FieldSchema{"WizardImageOpacity", FieldInt8, 1})
+	}
+	if ver >= 6700 {
+		fields = append(fields, FieldSchema{"WizardBackImageOpacity", FieldInt8, 1})
+		fields = append(fields, FieldSchema{"WizardLightControlStyling", FieldEnum, 1})
+	}
+
+	// Password
+	if ver >= 6500 {
+		// None
+	} else if ver >= 6400 {
+		fields = append(fields, FieldSchema{"PasswordHash", FieldBytes, 32})
+		fields = append(fields, FieldSchema{"PasswordSalt", FieldBytes, 44})
+	} else if ver >= 5000 {
+		fields = append(fields, FieldSchema{"PasswordHash", FieldBytes, 20})
+		if ver >= 4202 {
+			fields = append(fields, FieldSchema{"PasswordSalt", FieldBytes, 8})
+		}
+	} else if ver >= 4200 {
+		fields = append(fields, FieldSchema{"PasswordHash", FieldBytes, 16})
+		if ver >= 4202 {
+			fields = append(fields, FieldSchema{"PasswordSalt", FieldBytes, 8})
+		}
+	} else {
+		fields = append(fields, FieldSchema{"PasswordHash", FieldBytes, 4})
+	}
+
+	// ExtraDiskSpaceRequired & SlicesPerDisk
+	if ver >= 4000 {
+		fields = append(fields, FieldSchema{"ExtraDiskSpaceRequired", FieldInt64, 8})
+		fields = append(fields, FieldSchema{"SlicesPerDisk", FieldInt32, 4})
+	} else {
+		fields = append(fields, FieldSchema{"ExtraDiskSpaceRequired", FieldInt32, 4})
+	}
+
+	// Install Verbosity / Modes
+	if ver >= 2000 && ver < 5000 {
+		fields = append(fields, FieldSchema{"InstallMode", FieldEnum, 1})
+	}
+	if ver >= 1300 {
+		fields = append(fields, FieldSchema{"UninstallLogMode", FieldEnum, 1})
+	}
+	if ver >= 2000 && ver < 5000 {
+		fields = append(fields, FieldSchema{"UninstallStyle", FieldEnum, 1})
+	}
+	if ver >= 1306 {
+		fields = append(fields, FieldSchema{"DirExistsWarning", FieldEnum, 1})
+	}
+	if ver >= 5000 {
+		fields = append(fields, FieldSchema{"PrivilegesRequired", FieldEnum, 1})
+		fields = append(fields, FieldSchema{"ShowLanguageDialog", FieldEnum, 1})
+		fields = append(fields, FieldSchema{"LanguageDetectionMethod", FieldEnum, 1})
+		fields = append(fields, FieldSchema{"CompressMethod", FieldEnum, 1})
+		fields = append(fields, FieldSchema{"ArchitecturesAllowed", FieldBitset, 1})
+		fields = append(fields, FieldSchema{"ArchitecturesInstallIn64BitMode", FieldBitset, 1})
+	}
+
+	if ver >= 5201 && ver < 5310 {
+		fields = append(fields, FieldSchema{"SignedUninstallerOriginalSize", FieldInt32, 4})
+		fields = append(fields, FieldSchema{"SignedUninstallerHeaderChecksum", FieldInt32, 4})
+	}
+
+	if ver >= 5303 {
+		fields = append(fields, FieldSchema{"DisableDirPage", FieldEnum, 1})
+		fields = append(fields, FieldSchema{"DisableProgramGroupPage", FieldEnum, 1})
+	}
+
+	if ver >= 5500 {
+		fields = append(fields, FieldSchema{"UninstallDisplaySize", FieldInt64, 8})
+	} else if ver >= 5306 {
+		fields = append(fields, FieldSchema{"UninstallDisplaySize", FieldInt32, 4})
+	}
+
+	// Options
+	optionsSize := 2
+	if ver >= 6700 {
+		optionsSize = 8
+	} else if ver == 5501 || ver >= 6000 {
+		optionsSize = 7
+	} else if ver >= 5400 && ver < 5500 {
+		optionsSize = 7
+	} else if ver >= 5300 {
+		optionsSize = 6
+	} else if ver >= 4000 {
+		optionsSize = 5
+	} else if ver >= 3000 {
+		optionsSize = 5
+	} else if ver >= 2000 {
+		optionsSize = 3
+	}
+	fields = append(fields, FieldSchema{"Options", FieldBitset, optionsSize})
+
+	return RecordSchema{
+		NumWideStrings: numWide,
+		NumAnsiStrings: numAnsi,
+		FixedFields:    fields,
+	}
 }

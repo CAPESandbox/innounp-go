@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"compress/bzip2"
+	"compress/flate"
 	"compress/zlib"
 	"encoding/binary"
 	"fmt"
@@ -43,7 +44,18 @@ func ReadBlockHeader(r io.Reader, ver int) (*BlockHeader, error) {
 	var storedSize int64
 	var compressed bool
 
-	if ver < 6700 {
+	if ver < 3000 {
+		// Legacy v1.x and v2.x Block Header:
+		// 4-byte StoredSize + 4-byte DecompressedSize + 4-byte UncompressedCRC = 12 bytes
+		headerBytes = make([]byte, 12)
+		if _, err := io.ReadFull(r, headerBytes); err != nil {
+			return nil, fmt.Errorf("failed to read legacy 12-byte block header: %w", err)
+		}
+
+		sz := binary.LittleEndian.Uint32(headerBytes[0:4])
+		storedSize = int64(sz)
+		compressed = true // Legacy blocks are always compressed
+	} else if ver < 6700 {
 		// 32-bit Header: 4-byte StoredSize + 1-byte Compressed = 5 bytes
 		headerBytes = make([]byte, 5)
 		if _, err := io.ReadFull(r, headerBytes); err != nil {
@@ -69,6 +81,10 @@ func ReadBlockHeader(r io.Reader, ver int) (*BlockHeader, error) {
 	if actualCRC != crcExpected {
 		// Suppress strict CRC mismatch errors to support customized/protected layouts with minor padding drifts
 		// This ensures highly robust, self-healing payload extraction across custom compiler editions!
+	}
+
+	if EnableDebugLogging {
+		fmt.Printf("[DEBUG-HEADER] Version: %d, crcExpected: %08x, storedSize: %d, compressed: %t, headerBytes: %x\n", ver, crcExpected, storedSize, compressed, headerBytes)
 	}
 
 	return &BlockHeader{
@@ -154,36 +170,60 @@ func (c *CRCChunkReader) readNextChunk() error {
 
 // NewDecompressor initializes a decompression pipeline wrapper for extracting file payloads.
 func NewDecompressor(r io.Reader, method SetupCompressMethod) (io.ReadCloser, error) {
+	// Read the first 5 bytes to inspect the raw stream format signature (for auto-detection)
+	props := make([]byte, 5)
+	n, err := io.ReadFull(r, props)
+	if err == nil && n == 5 {
+		if method != CompressLZMA2 && method != CompressLZMA {
+			if props[0] == 0x5D {
+				// Auto-detected raw LZMA stream! Override method to LZMA.
+				method = CompressLZMA
+			}
+		}
+	}
+
+	// Prepend the inspected bytes back to the stream
+	var combinedReader io.Reader
+	if n > 0 {
+		combinedReader = io.MultiReader(bytes.NewReader(props[:n]), r)
+	} else {
+		combinedReader = r
+	}
+
 	switch method {
+	case CompressStored:
+		return io.NopCloser(combinedReader), nil
+
 	case CompressZip:
-		zReader, err := zlib.NewReader(r)
+		zReader, err := zlib.NewReader(combinedReader)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize zlib decompressor: %w", err)
+			// Fallback: If it's a legacy installer, the data might be raw deflate (no RFC 1950 header)
+			// Let's try parsing it as a raw flate stream instead!
+			flateReader := flate.NewReader(combinedReader)
+			return flateReader, nil
 		}
 		return zReader, nil
 
 	case CompressBzip:
-		bzReader := bzip2.NewReader(r)
+		bzReader := bzip2.NewReader(combinedReader)
 		return io.NopCloser(bzReader), nil
 
 	case CompressLZMA:
 		// Read 5-byte properties header from the stream: [1-byte properties] [4-byte dictionary size]
-		props := make([]byte, 5)
-		if _, err := io.ReadFull(r, props); err != nil {
+		propsHeader := make([]byte, 5)
+		if _, err := io.ReadFull(combinedReader, propsHeader); err != nil {
 			return nil, fmt.Errorf("failed to read LZMA properties: %w", err)
 		}
 
 		// Synthesize standard 13-byte classic LZMA header by appending 8 bytes of uncompressed size (unknown = 0xFF...)
 		header13 := make([]byte, 13)
-		copy(header13[0:5], props)
+		copy(header13[0:5], propsHeader)
 		for i := 5; i < 13; i++ {
 			header13[i] = 0xFF
 		}
 
 		// Prepend the synthesized header back to the stream
-		combinedReader := io.MultiReader(bytes.NewReader(header13), r)
-
-		lzReader, err := lzma.NewReader(combinedReader)
+		lzReader, err := lzma.NewReader(io.MultiReader(bytes.NewReader(header13), combinedReader))
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize LZMA decompressor: %w", err)
 		}
@@ -192,7 +232,7 @@ func NewDecompressor(r io.Reader, method SetupCompressMethod) (io.ReadCloser, er
 	case CompressLZMA2:
 		// Read 1-byte property header representing dictionary size
 		var prop byte
-		if err := binary.Read(r, binary.LittleEndian, &prop); err != nil {
+		if err := binary.Read(combinedReader, binary.LittleEndian, &prop); err != nil {
 			return nil, fmt.Errorf("failed to read LZMA2 property: %w", err)
 		}
 
@@ -202,7 +242,7 @@ func NewDecompressor(r io.Reader, method SetupCompressMethod) (io.ReadCloser, er
 		config := lzma.Reader2Config{
 			DictCap: dictSize,
 		}
-		lzReader2, err := config.NewReader2(r)
+		lzReader2, err := config.NewReader2(combinedReader)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize LZMA2 decompressor (dictionary size %d): %w", dictSize, err)
 		}
@@ -214,32 +254,40 @@ func NewDecompressor(r io.Reader, method SetupCompressMethod) (io.ReadCloser, er
 }
 
 // NewBlockReader returns a decompressed read-closer stream for the given block.
-func NewBlockReader(r io.Reader, header *BlockHeader, method SetupCompressMethod) (io.ReadCloser, error) {
-	// 1. Wrap the stream in our custom CRCChunkReader
-	chunkReader := NewCRCChunkReader(r, header.StoredSize)
+func NewBlockReader(r io.Reader, header *BlockHeader, method SetupCompressMethod, ver int) (io.ReadCloser, error) {
+	// 1. Wrap the stream in CRCChunkReader or direct LimitReader based on legacy version
+	var srcReader io.Reader
+	if ver < 4000 {
+		srcReader = io.LimitReader(r, header.StoredSize)
+	} else {
+		srcReader = NewCRCChunkReader(r, header.StoredSize)
+	}
 
-	// 2. If the block is not compressed, serve the CRCChunkReader directly
+	// 2. If the block is not compressed, serve the srcReader directly
 	if !header.Compressed || method == CompressStored {
-		return io.NopCloser(chunkReader), nil
+		return io.NopCloser(srcReader), nil
 	}
 
 	// 3. Wrap in appropriate decompression pipeline
 	switch method {
 	case CompressZip:
-		zReader, err := zlib.NewReader(chunkReader)
+		zReader, err := zlib.NewReader(srcReader)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize zlib decompressor: %w", err)
+			// Fallback: If it's a legacy installer, the data might be raw deflate (no RFC 1950 header)
+			// Let's try parsing it as a raw flate stream instead!
+			flateReader := flate.NewReader(srcReader)
+			return flateReader, nil
 		}
 		return zReader, nil
 
 	case CompressBzip:
-		bzReader := bzip2.NewReader(chunkReader)
+		bzReader := bzip2.NewReader(srcReader)
 		return io.NopCloser(bzReader), nil
 
 	case CompressLZMA:
 		// Read 5-byte properties header from the stream: [1-byte properties] [4-byte dictionary size]
 		props := make([]byte, 5)
-		if _, err := io.ReadFull(chunkReader, props); err != nil {
+		if _, err := io.ReadFull(srcReader, props); err != nil {
 			return nil, fmt.Errorf("failed to read LZMA properties: %w", err)
 		}
 
@@ -255,7 +303,7 @@ func NewBlockReader(r io.Reader, header *BlockHeader, method SetupCompressMethod
 		}
 
 		// Prepend the synthesized header back to the stream
-		combinedReader := io.MultiReader(bytes.NewReader(header13), chunkReader)
+		combinedReader := io.MultiReader(bytes.NewReader(header13), srcReader)
 
 		lzReader, err := lzma.NewReader(combinedReader)
 		if err != nil {
@@ -266,7 +314,7 @@ func NewBlockReader(r io.Reader, header *BlockHeader, method SetupCompressMethod
 	case CompressLZMA2:
 		// Read 1-byte property header representing dictionary size
 		var prop byte
-		if err := binary.Read(chunkReader, binary.LittleEndian, &prop); err != nil {
+		if err := binary.Read(srcReader, binary.LittleEndian, &prop); err != nil {
 			return nil, fmt.Errorf("failed to read LZMA2 property: %w", err)
 		}
 
@@ -277,7 +325,7 @@ func NewBlockReader(r io.Reader, header *BlockHeader, method SetupCompressMethod
 			DictCap: dictSize,
 		}
 
-		lz2Reader, err := config.NewReader2(chunkReader)
+		lz2Reader, err := config.NewReader2(srcReader)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize LZMA2 decompressor (dictionary size %d): %w", dictSize, err)
 		}

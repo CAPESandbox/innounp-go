@@ -172,7 +172,7 @@ func TestNewBlockReader_ZipDecompress(t *testing.T) {
 	}
 
 	// Create decompressed block reader
-	reader, err := NewBlockReader(fullStreamBuf, hdr, CompressZip)
+	reader, err := NewBlockReader(fullStreamBuf, hdr, CompressZip, 5500)
 	if err != nil {
 		t.Fatalf("failed to create decompressed reader: %v", err)
 	}

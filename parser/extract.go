@@ -59,13 +59,13 @@ func ExtractFile(
 		return fmt.Errorf("failed to seek to chunk start offset at %d: %w", absOffset, err)
 	}
 
-	// 2. Read and verify unencrypted 4-byte chunk ID: 'zlb'#26 (0x1A626C7A)
+	// 2. Read and verify unencrypted 4-byte chunk ID: 'zlb'#26, 'lzm'#26, 'lz2'#26 (high byte is 0x1A)
 	var compID uint32
 	if err := binary.Read(file, binary.LittleEndian, &compID); err != nil {
 		return fmt.Errorf("failed to read comp ID: %w", err)
 	}
-	if compID != 0x1A626C7A {
-		return errors.New("invalid compression ID: source block is corrupted")
+	if (compID >> 24) != 0x1A {
+		return fmt.Errorf("invalid compression ID: source block is corrupted (compID read: 0x%08X)", compID)
 	}
 
 	var rawReader io.Reader = file
@@ -108,7 +108,11 @@ func ExtractFile(
 
 	// 4. Initialize Decompressor Stream directly over the decrypted rawReader!
 	// Payload files streams are pure continuous compressed streams without block headers or segmented CRCs.
-	decompressor, err := NewDecompressor(rawReader, compressMethod)
+	chunkCompMethod := compressMethod
+	if !hasFlag(fl.Flags, 7) { // foChunkCompressed is bit 7
+		chunkCompMethod = CompressStored
+	}
+	decompressor, err := NewDecompressor(rawReader, chunkCompMethod)
 	if err != nil {
 		return fmt.Errorf("failed to initialize decompressor: %w", err)
 	}

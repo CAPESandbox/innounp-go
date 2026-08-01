@@ -57,7 +57,7 @@ func CrackPassword(exePath string, wordlist []string) (*PasswordCrackResult, err
 		return nil, fmt.Errorf("failed to read block header: %w", err)
 	}
 	compMethod := getSetup0CompressionMethod(ver)
-	blockReader, err := NewBlockReader(file, blockHeader, compMethod)
+	blockReader, err := NewBlockReader(file, blockHeader, compMethod, ver)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize block reader: %w", err)
 	}

@@ -111,12 +111,15 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 
 	compMethod := getSetup0CompressionMethod(ver)
 	var blockReader1 io.ReadCloser
-	blockReader1, err = NewBlockReader(file, blockHeader1, compMethod)
+	blockReader1, err = NewBlockReader(file, blockHeader1, compMethod, ver)
 	
 	// Self-healing metadata block 1 fallback: if classic LZMA fails, retry with LZMA2!
 	var decompressedBuf1 bytes.Buffer
 	if err == nil {
 		_, err = io.Copy(&decompressedBuf1, blockReader1)
+		if err != nil && EnableDebugLogging {
+			fmt.Printf("[DEBUG] SETUP.0 block 1 decompression error: %v, buffer len: %d\n", err, decompressedBuf1.Len())
+		}
 		blockReader1.Close()
 	}
 	if err != nil {
@@ -124,7 +127,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		decompressedBuf1.Reset()
 		if _, seekErr := file.Seek(setup0BlockOffset, io.SeekStart); seekErr == nil {
 			if blockHeader1Fallback, hdrErr := ReadBlockHeader(file, ver); hdrErr == nil {
-				if blockReader1Fallback, decErr := NewBlockReader(file, blockHeader1Fallback, CompressLZMA2); decErr == nil {
+				if blockReader1Fallback, decErr := NewBlockReader(file, blockHeader1Fallback, CompressLZMA2, ver); decErr == nil {
 					if _, copyErr := io.Copy(&decompressedBuf1, blockReader1Fallback); copyErr == nil {
 						err = nil
 					}
@@ -150,16 +153,60 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 	success := false
 	returnedCompressMethod := compMethod
 
-	// Two-Attempt Self-Healing Try-Fallback Loop:
+	// Multi-Attempt Self-Healing Try-Fallback Loop:
 	// First attempt uses the detected version. If parsing fails, we automatically fallback to
-	// version 5300 (Cardinal-aligned display size and MD5/SHA-1 password boundaries) to heal spoofed installers.
-	for attempt := 1; attempt <= 2; attempt++ {
+	// modern, hybrid, or legacy layouts to heal spoofed installers.
+	for attempt := 1; attempt <= 7; attempt++ {
 		r.Seek(0, io.SeekStart)
-		if attempt == 2 {
+		if attempt > 1 {
 			if origVer == 5500 {
-				logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed 5.5.0 layout.\n")
-				logProgress("    Self-healing to 5.3.x alignment fallback...\n")
-				ver = 5300
+				if attempt == 2 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed 5.5.0 layout.\n")
+					logProgress("    Self-healing to 7.0.x modern fallback...\n")
+					ver = 7000
+				} else if attempt == 3 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed 7.0.x layout.\n")
+					logProgress("    Self-healing to 6.4.x modern fallback...\n")
+					ver = 6400
+				} else if attempt == 4 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed layouts.\n")
+					logProgress("    Self-healing to 6.0.x fallback...\n")
+					ver = 6000
+				} else if attempt == 5 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed layouts.\n")
+					logProgress("    Self-healing to 5.5.1 hybrid fallback...\n")
+					ver = 5501
+				} else if attempt == 6 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under spoofed layouts.\n")
+					logProgress("    Self-healing to 5.3.x alignment fallback...\n")
+					ver = 5300
+				} else {
+					break
+				}
+			} else if origVer == 6000 {
+				if attempt == 2 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under 6.0.0 layout.\n")
+					logProgress("    Self-healing to 6.7.x modern fallback...\n")
+					ver = 6700
+				} else if attempt == 3 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under 6.7.0 layout.\n")
+					logProgress("    Self-healing to 6.6.0 fallback...\n")
+					ver = 6600
+				} else if attempt == 4 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under 6.6.0 layout.\n")
+					logProgress("    Self-healing to 6.1.0 fallback...\n")
+					ver = 6100
+				} else if attempt == 5 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under 6.1.0 layout.\n")
+					logProgress("    Self-healing to 5.5.0 fallback...\n")
+					ver = 5500
+				} else if attempt == 6 {
+					logProgress("\n[!] FORENSIC HEURISTIC: Sequential parsing failed under 5.5.0 layout.\n")
+					logProgress("    Self-healing to 5.3.0 fallback...\n")
+					ver = 5300
+				} else {
+					break
+				}
 			} else {
 				break
 			}
@@ -190,6 +237,53 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			continue
 		}
 
+		// Skip legacy custom bitmaps appended to the header for Inno Setup < 4.0.0
+		if ver < 4000 {
+			options := getInt64Field(parsedHeader.Fields, "Options")
+			if (options & (1 << 2)) != 0 {
+				if EnableDebugLogging {
+					fmt.Println("[DEBUG] Legacy Wizard Image detected, skipping...")
+				}
+				var strLen uint32
+				if err := binary.Read(r, binary.LittleEndian, &strLen); err != nil {
+					debugPrintf("[DEBUG] Failed to read legacy WizardImage length: %v\n", err)
+					continue
+				}
+				if strLen > 0 {
+					if _, err := io.CopyN(io.Discard, r, int64(strLen)); err != nil {
+						debugPrintf("[DEBUG] Failed to skip legacy WizardImage payload: %v\n", err)
+						continue
+					}
+				}
+			}
+			if (options & (1 << 3)) != 0 {
+				if EnableDebugLogging {
+					fmt.Println("[DEBUG] Legacy Small Wizard Image detected, skipping...")
+				}
+				var strLen uint32
+				if err := binary.Read(r, binary.LittleEndian, &strLen); err != nil {
+					debugPrintf("[DEBUG] Failed to read legacy WizardSmallImage length: %v\n", err)
+					continue
+				}
+				if strLen > 0 {
+					if _, err := io.CopyN(io.Discard, r, int64(strLen)); err != nil {
+						debugPrintf("[DEBUG] Failed to skip legacy WizardSmallImage payload: %v\n", err)
+						continue
+					}
+				}
+			}
+		}
+
+		if ver < 4000 && EnableDebugLogging {
+			logProgress("[DEBUG-POS] Position after skipping legacy bitmaps: %d\n", r.Size() - int64(r.Len()))
+			pos := r.Size() - int64(r.Len())
+			if pos+64 <= int64(len(rawBytes1)) {
+				logProgress("[DEBUG-HEX] Next 64 bytes after legacy bitmaps: %x\n", rawBytes1[pos:pos+64])
+			} else {
+				logProgress("[DEBUG-HEX] Next bytes after legacy bitmaps: %x\n", rawBytes1[pos:])
+			}
+		}
+
 		if EnableDebugLogging {
 			logProgress("[DEBUG] Header WideStrings (%d): %+v\n", len(parsedHeader.WideStrings), parsedHeader.WideStrings)
 			logProgress("[DEBUG] Header AnsiStrings (%d): %+v\n", len(parsedHeader.AnsiStrings), parsedHeader.AnsiStrings)
@@ -211,8 +305,9 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			if displaySize > 10995116277760 || displaySize < 0 {
 				logProgress("\n[!] FORENSIC HEURISTIC: Detected Version Spoofing via large uninstall size (%d bytes)!\n", displaySize)
 				logProgress("    Self-healing stream alignment in progress...\n")
-				ver = 5300
-				headerSchema, _ = GetRecordSchema(5300, "TSetupHeader", isUnicode)
+				ver = 5205
+				headerSchema, _ = GetRecordSchema(5205, "TSetupHeader", isUnicode)
+				r.Seek(0, io.SeekStart)
 				parsedHeader, err = ReadRecord(r, headerSchema, isUnicode)
 				if err != nil {
 					debugPrintf("[DEBUG] Attempt %d (Self-Healed): failed to re-parse setup header: %v\n", attempt, err)
@@ -236,6 +331,21 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		numRegs = getIntField(parsedHeader.Fields, "NumRegistryEntries")
 		numDeletes = getIntField(parsedHeader.Fields, "NumInstallDeleteEntries") + getIntField(parsedHeader.Fields, "NumUninstallDeleteEntries")
 		numRuns = getIntField(parsedHeader.Fields, "NumRunEntries") + getIntField(parsedHeader.Fields, "NumUninstallRunEntries")
+
+		if EnableDebugLogging {
+			fmt.Printf("[DEBUG-COUNTS] ver=%d numLanguages=%d, numMessages=%d, numDirs=%d, numFiles=%d, numLocations=%d, numIcons=%d\n", ver, numLanguages, numMessages, numDirs, numFiles, numLocations, numIcons)
+			fmt.Printf("[DEBUG-FIELDS] Fields: %+v\n", parsedHeader.Fields)
+			pos := r.Size() - int64(r.Len())
+			endHex := pos + 64
+			if endHex > int64(len(rawBytes1)) {
+				endHex = int64(len(rawBytes1))
+			}
+			fmt.Printf("[DEBUG-POS-HEX] Next 64 bytes at start of lists (pos=%d): %x\n", pos, rawBytes1[pos:endHex])
+			// Print language fixed fields starting at position 148348
+			if len(rawBytes1) >= 148348+64 {
+				fmt.Printf("[DEBUG-LANG-FIXED-HEX] Next 64 bytes of language fixed fields (pos=148348): %x\n", rawBytes1[148348:148348+64])
+			}
+		}
 
 		// Extract encryption configuration (if v6+)
 		if ver < 6500 {
@@ -277,6 +387,10 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			for i := uint32(0); i < list.count; i++ {
 				if EnableDebugLogging {
 					logProgress("[DEBUG-POS] Position before skipping %s item %d: %d\n", list.schema, i, r.Size() - int64(r.Len()))
+				}
+				if EnableDebugLogging && list.schema == "TSetupLanguageEntry" {
+					posBefore := r.Size() - int64(r.Len())
+					fmt.Printf("[DEBUG-LANG-HEX] Bytes before TSetupLanguageEntry item %d: %x\n", i, rawBytes1[posBefore:posBefore+128])
 				}
 				if _, err := ReadRecord(r, schema, isUnicode); err != nil {
 					debugPrintf("[DEBUG] Attempt %d: failed to skip list %s at item %d: %v\n", attempt, list.schema, i, err)
@@ -321,8 +435,11 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				destName = rec.AnsiStrings[1]
 			}
 
-			locationEntry := int32(rec.Fields["LocationEntry"].(uint32))
-			externalSize := rec.Fields["ExternalSize"].(int64)
+			locationEntry := int32(getIntField(rec.Fields, "LocationEntry"))
+			if ver < 4000 {
+				locationEntry = int32(i)
+			}
+			externalSize := getInt64Field(rec.Fields, "ExternalSize")
 
 			filesMetadata = append(filesMetadata, FileMetadata{
 				ID:             int(i),
@@ -400,7 +517,13 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 		// Seek to raw EXE Block 2 (Locations Block) containing TSetupFileLocationEntry records.
 		// Block 2 starts exactly after Block 1's compressed data (signature size + block header + compressed size).
 		// If there is no separate Block 2 (such as in mock tests), we read from Block 1 directly.
-		block2Offset := setup0BlockOffset + 9 + int64(blockHeader1.StoredSize)
+		headerSize := int64(9)
+		if ver < 3000 {
+			headerSize = 16
+		} else if ver >= 6700 {
+			headerSize = 13
+		}
+		block2Offset := setup0BlockOffset + headerSize + int64(blockHeader1.StoredSize)
 
 		var locReader io.Reader = r
 		var fileSize int64 = 0
@@ -412,7 +535,7 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 			if _, err := file.Seek(block2Offset, io.SeekStart); err == nil {
 				blockHeader2, err := ReadBlockHeader(file, ver)
 				if err == nil {
-					blockReader2, err := NewBlockReader(file, blockHeader2, compMethod)
+					blockReader2, err := NewBlockReader(file, blockHeader2, compMethod, ver)
 					if err == nil {
 						var decompressedBuf2 bytes.Buffer
 						if _, err := io.Copy(&decompressedBuf2, blockReader2); err == nil {
@@ -458,9 +581,9 @@ func ListFilesAndLocations(exePath string) (int, bool, []FileMetadata, []Unified
 				}
 			}
 
-			chunkSuboffset := rec.Fields["ChunkSuboffset"].(int64)
-			originalSize := rec.Fields["OriginalSize"].(int64)
-			chunkCompressedSize := rec.Fields["ChunkCompressedSize"].(int64)
+			chunkSuboffset := getInt64Field(rec.Fields, "ChunkSuboffset")
+			originalSize := getInt64Field(rec.Fields, "OriginalSize")
+			chunkCompressedSize := getInt64Field(rec.Fields, "ChunkCompressedSize")
 			
 			// Safely support either SHA1Sum or SHA256Sum based on compiler version
 			var sha1Sum []byte
@@ -592,13 +715,13 @@ func ExtractAllFiles(exePath string, outDir string, password string) (int, int, 
 			return 0, 0, 0, fmt.Errorf("failed to seek to chunk start: %w", err)
 		}
 
-		// Read and verify comp ID
+		// Read and verify comp ID: 'zlb'#26, 'lzm'#26, 'lz2'#26 (high byte is 0x1A)
 		var compID uint32
 		if err := binary.Read(file, binary.LittleEndian, &compID); err != nil {
 			return 0, 0, 0, fmt.Errorf("failed to read comp ID: %w", err)
 		}
-		if compID != 0x1A626C7A {
-			return 0, 0, 0, errors.New("invalid compression ID: source block is corrupted")
+		if (compID >> 24) != 0x1A {
+			return 0, 0, 0, fmt.Errorf("invalid compression ID: source block is corrupted (compID read: 0x%08X)", compID)
 		}
 
 		// Setup Decryption Reader
@@ -632,8 +755,14 @@ func ExtractAllFiles(exePath string, outDir string, password string) (int, int, 
 			}
 		}
 
+		// Determine the compression method for this chunk based on chunk flags
+		chunkCompMethod := compMethod
+		if !hasFlag(firstLoc.Flags, 7) { // foChunkCompressed is bit 7
+			chunkCompMethod = CompressStored
+		}
+
 		// Initialize Decompressor Stream
-		decompressor, err := NewDecompressor(rawReader, compMethod)
+		decompressor, err := NewDecompressor(rawReader, chunkCompMethod)
 		if err != nil {
 			return 0, 0, 0, fmt.Errorf("failed to initialize decompressor: %w", err)
 		}
@@ -781,6 +910,25 @@ func getIntField(fields map[string]interface{}, name string) uint32 {
 	return 0
 }
 
+// getInt64Field safely reads an int64 value from a parsed record field map, defaulting to 0 if missing.
+func getInt64Field(fields map[string]interface{}, name string) int64 {
+	if val, ok := fields[name]; ok {
+		switch v := val.(type) {
+		case int64:
+			return v
+		case uint32:
+			return int64(v)
+		case uint64:
+			return int64(v)
+		case int32:
+			return int64(v)
+		case int:
+			return int64(v)
+		}
+	}
+	return 0
+}
+
 // DecompileInnoExe extracts and decompiles compiled Pascal script bytecode from the Inno Setup executable.
 func DecompileInnoExe(exePath string) (string, error) {
 	file, err := os.Open(exePath)
@@ -814,7 +962,7 @@ func DecompileInnoExe(exePath string) (string, error) {
 	}
 
 	compMethod := getSetup0CompressionMethod(ver)
-	blockReader, err := NewBlockReader(file, blockHeader, compMethod)
+	blockReader, err := NewBlockReader(file, blockHeader, compMethod, ver)
 	if err != nil {
 		return "", err
 	}

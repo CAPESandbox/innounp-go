@@ -155,11 +155,11 @@ func TestGetRecordSchema_Version7000(t *testing.T) {
 		t.Fatalf("failed to get schema for TSetupFileEntry under version 7000")
 	}
 
-	if fileSchema.NumWideStrings != 15 {
-		t.Errorf("expected 15 wide strings in v7000 TSetupFileEntry, got %d", fileSchema.NumWideStrings)
+	if fileSchema.NumWideStrings != 16 {
+		t.Errorf("expected 16 wide strings in v7000 TSetupFileEntry, got %d", fileSchema.NumWideStrings)
 	}
-	if fileSchema.NumAnsiStrings != 1 {
-		t.Errorf("expected 1 ansi string in v7000 TSetupFileEntry, got %d", fileSchema.NumAnsiStrings)
+	if fileSchema.NumAnsiStrings != 0 {
+		t.Errorf("expected 0 ansi strings in v7000 TSetupFileEntry, got %d", fileSchema.NumAnsiStrings)
 	}
 
 	// Verify that the location entry has StartOffset as FieldInt64 (8 bytes)

@@ -5,3 +5,4 @@ __pycache__/innounpack.cpython-314.pyc
 libinnounpack.dylib
 research.md
 parser/integration_test.go
+parser/regression_test.go

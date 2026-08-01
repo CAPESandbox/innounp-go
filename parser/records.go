@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -42,9 +43,16 @@ func ReadRecord(r io.Reader, schema RecordSchema, isUnicode bool) (*ParsedRecord
 			return nil, fmt.Errorf("failed to read WideString %d length: %w", i, err)
 		}
 
+		if EnableDebugLogging {
+			fmt.Printf("[DEBUG-STR] Reading WideString %d: length %d\n", i, strLen)
+		}
+
 		if strLen > 0 {
 			strBytes := make([]byte, strLen)
 			if _, err := io.ReadFull(r, strBytes); err != nil {
+				if br, ok := r.(*bytes.Reader); ok {
+					fmt.Printf("[DEBUG-ERR] Failed to read WideString %d bytes: strLen=%d, reader pos=%d, reader len=%d\n", i, strLen, br.Size() - int64(br.Len()), br.Len())
+				}
 				return nil, fmt.Errorf("failed to read WideString %d bytes: %w", i, err)
 			}
 			record.WideStrings = append(record.WideStrings, decodeUTF16LE(strBytes))
@@ -126,6 +134,25 @@ func ReadRecord(r io.Reader, schema RecordSchema, isUnicode bool) (*ParsedRecord
 				// Pad with 2 trailing zero bytes to make 8 bytes (little-endian)
 				paddedBuf := []byte{buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], 0, 0}
 				val := binary.LittleEndian.Uint64(paddedBuf)
+				record.Fields[field.Name] = val
+			} else if field.Size == 5 {
+				// Read exactly 5 bytes for a 40-bit set and pad to uint64
+				buf := make([]byte, 5)
+				if _, err := io.ReadFull(r, buf); err != nil {
+					return nil, fmt.Errorf("failed to read 40-bit field %s (Bitset): %w", field.Name, err)
+				}
+				// Pad with 3 trailing zero bytes to make 8 bytes (little-endian)
+				paddedBuf := []byte{buf[0], buf[1], buf[2], buf[3], buf[4], 0, 0, 0}
+				val := binary.LittleEndian.Uint64(paddedBuf)
+				record.Fields[field.Name] = val
+			} else if field.Size == 3 {
+				// Read exactly 3 bytes for a 24-bit set and pad to uint32
+				buf := make([]byte, 3)
+				if _, err := io.ReadFull(r, buf); err != nil {
+					return nil, fmt.Errorf("failed to read 24-bit field %s (Bitset): %w", field.Name, err)
+				}
+				paddedBuf := []byte{buf[0], buf[1], buf[2], 0}
+				val := binary.LittleEndian.Uint32(paddedBuf)
 				record.Fields[field.Name] = val
 			} else if field.Size == 2 {
 				var val uint16

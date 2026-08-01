@@ -35,6 +35,47 @@ func init() {
 	}
 }
 
+func isValidOffset0(filePath string, offset0 int64) bool {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	ver, _, err := DetectVersionFromSetup0(file, offset0)
+	if err != nil {
+		return false
+	}
+
+	// If version >= 4.0.0, we MUST also verify that there is a mathematically valid block header at offset0 + 64!
+	if ver >= 4000 {
+		if _, err := file.Seek(offset0+64, io.SeekStart); err != nil {
+			return false
+		}
+
+		var crcExpected uint32
+		if err := binary.Read(file, binary.LittleEndian, &crcExpected); err != nil {
+			return false
+		}
+
+		headerSize := 5
+		if ver >= 6700 {
+			headerSize = 9
+		}
+		headerBytes := make([]byte, headerSize)
+		if _, err := io.ReadFull(file, headerBytes); err != nil {
+			return false
+		}
+
+		actualCRC := crc32.ChecksumIEEE(headerBytes)
+		if actualCRC != crcExpected {
+			return false
+		}
+	}
+
+	return true
+}
+
 // ParseSetupLdr opens an Inno Setup EXE, parses its PE headers to locate the
 // SetupLdrOffsetTable, and extracts verified offset information.
 // It features an automatic dual-path fallback:
@@ -47,22 +88,49 @@ func ParseSetupLdr(filePath string) (*UnifiedOffsetTable, error) {
 	}
 	defer file.Close()
 
-	// --- Path 1: Try DOS Stub ExeHeader at offset 0x30 ---
-	table, err := tryParseDOSStubHeader(file)
+	var backupTable *UnifiedOffsetTable
+
+	// --- Path 1: Traverse PE .rsrc Tree for Resource 11111 (Most authoritative for modern loaders) ---
+	table, err := tryParsePEResources(filePath)
 	if err == nil {
-		return table, nil
+		if isValidOffset0(filePath, table.Offset0) {
+			if table.Offset1 > 0 {
+				return table, nil
+			}
+			// Decoupled payload discovery: if Offset1 is 0, let's see if tryParseSignatureScan can find it!
+			if sigTable, scanErr := tryParseSignatureScan(filePath); scanErr == nil {
+				return sigTable, nil
+			}
+			return table, nil
+		}
+		backupTable = table
 	}
 
-	// --- Path 2: Fallback to PE Resource 11111 Parser (Standard for modern installers) ---
-	table, err = tryParsePEResources(filePath)
+	// --- Path 2: Try DOS Stub ExeHeader at offset 0x30 (For older legacy loaders) ---
+	table, err = tryParseDOSStubHeader(file)
 	if err == nil {
-		return table, nil
+		if isValidOffset0(filePath, table.Offset0) {
+			if table.Offset1 > 0 {
+				return table, nil
+			}
+			if sigTable, scanErr := tryParseSignatureScan(filePath); scanErr == nil {
+				return sigTable, nil
+			}
+			return table, nil
+		}
+		if backupTable == nil {
+			backupTable = table
+		}
 	}
 
 	// --- Path 3: Signature-Scanning Fallback (For highly custom-packed or protected loaders) ---
 	table, scanErr := tryParseSignatureScan(filePath)
 	if scanErr == nil {
 		return table, nil
+	}
+
+	if backupTable != nil {
+		return backupTable, nil
 	}
 
 	return nil, fmt.Errorf("invalid Inno Setup installer executable (failed both DOS-stub 0x30, PE resource 11111, and signature scans): %w", err)
@@ -74,30 +142,42 @@ func tryParseSignatureScan(filePath string) (*UnifiedOffsetTable, error) {
 		return nil, err
 	}
 
-	// 1. Search SETUP.0 signature: "Inno Setup Setup Data"
 	sig := []byte("Inno Setup Setup Data")
-	offset0 := bytes.Index(data, sig)
-	if offset0 == -1 {
-		return nil, errors.New("setup data signature not found")
+	offset := len(data)
+	var validTables []*UnifiedOffsetTable
+
+	for {
+		idx := bytes.LastIndex(data[:offset], sig)
+		if idx == -1 {
+			break
+		}
+
+		if isValidOffset0(filePath, int64(idx)) {
+			// Search SETUP-1.bin payload signature globally: 0x1A626C7A (zlb\x1a)
+			payloadSig := []byte{0x7a, 0x6c, 0x62, 0x1a} // 0x1A626C7A in little-endian
+			offset1 := bytes.Index(data, payloadSig)
+			if offset1 == -1 {
+				offset1 = 0
+			}
+
+			validTables = append(validTables, &UnifiedOffsetTable{
+				Version:   1,
+				TotalSize: int64(len(data)),
+				Offset0:   int64(idx),
+				Offset1:   int64(offset1),
+				Is64Bit:   false,
+			})
+		}
+
+		offset = idx
 	}
 
-	// 2. Search SETUP-1.bin payload signature: 0x1A626C7A (zlb\x1a)
-	payloadSig := []byte{0x7a, 0x6c, 0x62, 0x1a} // 0x1A626C7A in little-endian
-	offset1 := bytes.Index(data[offset0:], payloadSig)
-	if offset1 == -1 {
-		// Fallback to offset0 if no separate payload signature is found (single compressed block)
-		offset1 = 0
-	} else {
-		offset1 += offset0
+	if len(validTables) > 0 {
+		// Return the first valid occurrence in the file (index of real overlay), defeating decoy trails
+		return validTables[len(validTables)-1], nil
 	}
 
-	return &UnifiedOffsetTable{
-		Version:   1,
-		TotalSize: int64(len(data)),
-		Offset0:   int64(offset0),
-		Offset1:   int64(offset1),
-		Is64Bit:   false,
-	}, nil
+	return nil, errors.New("setup data signature not found or no valid overlay signature found")
 }
 
 func tryParseDOSStubHeader(file *os.File) (*UnifiedOffsetTable, error) {
