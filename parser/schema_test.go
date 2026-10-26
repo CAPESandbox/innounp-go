@@ -65,3 +65,55 @@ func TestGetRecordSchema_5402(t *testing.T) {
 		}
 	}
 }
+
+func TestGetRecordSchema_ModernUnicodeLanguageEntry(t *testing.T) {
+	for _, ver := range []int{6600, 7000} {
+		schema, ok := GetRecordSchema(ver, "TSetupLanguageEntry", true)
+		if !ok {
+			t.Fatalf("failed to retrieve TSetupLanguageEntry schema for ver %d", ver)
+		}
+		if schema.NumWideStrings != 4 {
+			t.Errorf("expected 4 WideStrings for ver %d TSetupLanguageEntry, got %d", ver, schema.NumWideStrings)
+		}
+		if schema.NumAnsiStrings != 4 {
+			t.Errorf("expected 4 AnsiStrings for ver %d TSetupLanguageEntry, got %d", ver, schema.NumAnsiStrings)
+		}
+
+		expectedFields := []string{
+			"LanguageID",
+			"DialogFontSize",
+			"DialogFontBaseScaleHeight",
+			"DialogFontBaseScaleWidth",
+			"WelcomeFontSize",
+			"RightToLeft",
+		}
+		if len(schema.FixedFields) != len(expectedFields) {
+			t.Fatalf("expected %d fixed fields for ver %d, got %d", len(expectedFields), ver, len(schema.FixedFields))
+		}
+		for i, name := range expectedFields {
+			if schema.FixedFields[i].Name != name {
+				t.Errorf("expected field %d to be %s, got %s", i, name, schema.FixedFields[i].Name)
+			}
+		}
+	}
+
+	// Verify TSetupPermissionEntry preserves 1 ANSI string in Unicode mode
+	permSchema, ok := GetRecordSchema(6600, "TSetupPermissionEntry", true)
+	if !ok {
+		t.Fatalf("failed to retrieve TSetupPermissionEntry schema")
+	}
+	if permSchema.NumAnsiStrings != 1 {
+		t.Errorf("expected 1 AnsiString for Unicode TSetupPermissionEntry, got %d", permSchema.NumAnsiStrings)
+	}
+
+	// Verify TSetupISSigKeyEntry preserves 1 ANSI string in Unicode mode
+	for _, ver := range []int{6600, 7000} {
+		sigSchema, ok := GetRecordSchema(ver, "TSetupISSigKeyEntry", true)
+		if !ok {
+			t.Fatalf("failed to retrieve TSetupISSigKeyEntry schema for ver %d", ver)
+		}
+		if sigSchema.NumAnsiStrings != 1 {
+			t.Errorf("expected 1 AnsiString for Unicode TSetupISSigKeyEntry, got %d", sigSchema.NumAnsiStrings)
+		}
+	}
+}

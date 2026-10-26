@@ -300,6 +300,13 @@ func init() {
 		"TSetupComponentEntry":    SchemaRegistry[5300]["TSetupComponentEntry"],
 		"TSetupTaskEntry":         SchemaRegistry[5300]["TSetupTaskEntry"],
 		"TSetupDirEntry":          SchemaRegistry[5300]["TSetupDirEntry"],
+		"TSetupISSigKeyEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 1,
+			FixedFields: []FieldSchema{
+				{"TotalKeyDataSize", FieldInt32, 4},
+			},
+		},
 		"TSetupFileEntry":         SchemaRegistry[5300]["TSetupFileEntry"],
 		"TSetupFileLocationEntry": SchemaRegistry[5300]["TSetupFileLocationEntry"],
 		"TSetupIconEntry": {
@@ -718,6 +725,13 @@ func init() {
 		"TSetupComponentEntry":     SchemaRegistry[5500]["TSetupComponentEntry"],
 		"TSetupTaskEntry":          SchemaRegistry[5500]["TSetupTaskEntry"],
 		"TSetupDirEntry":           SchemaRegistry[5500]["TSetupDirEntry"],
+		"TSetupISSigKeyEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 1,
+			FixedFields: []FieldSchema{
+				{"TotalKeyDataSize", FieldInt32, 4},
+			},
+		},
 		"TSetupFileEntry": {
 			NumWideStrings: 10,
 			NumAnsiStrings: 0,
@@ -818,7 +832,18 @@ func init() {
 				{"Options", FieldBitset, 8},
 			},
 		},
-		"TSetupLanguageEntry":     SchemaRegistry[5500]["TSetupLanguageEntry"],
+		"TSetupLanguageEntry": {
+			NumWideStrings: 4,
+			NumAnsiStrings: 4,
+			FixedFields: []FieldSchema{
+				{"LanguageID", FieldInt16, 2},
+				{"DialogFontSize", FieldInt32, 4},
+				{"DialogFontBaseScaleHeight", FieldInt32, 4},
+				{"DialogFontBaseScaleWidth", FieldInt32, 4},
+				{"WelcomeFontSize", FieldInt32, 4},
+				{"RightToLeft", FieldInt8, 1},
+			},
+		},
 		"TSetupCustomMessageEntry": SchemaRegistry[5500]["TSetupCustomMessageEntry"],
 		"TSetupPermissionEntry":    SchemaRegistry[5500]["TSetupPermissionEntry"],
 		"TSetupTypeEntry":          SchemaRegistry[5500]["TSetupTypeEntry"],
@@ -961,13 +986,31 @@ func init() {
 				{"Options", FieldBitset, 8},
 			},
 		},
-		"TSetupLanguageEntry":     SchemaRegistry[5500]["TSetupLanguageEntry"],
+		"TSetupLanguageEntry": {
+			NumWideStrings: 4,
+			NumAnsiStrings: 4,
+			FixedFields: []FieldSchema{
+				{"LanguageID", FieldInt16, 2},
+				{"DialogFontSize", FieldInt32, 4},
+				{"DialogFontBaseScaleHeight", FieldInt32, 4},
+				{"DialogFontBaseScaleWidth", FieldInt32, 4},
+				{"WelcomeFontSize", FieldInt32, 4},
+				{"RightToLeft", FieldInt8, 1},
+			},
+		},
 		"TSetupCustomMessageEntry": SchemaRegistry[5500]["TSetupCustomMessageEntry"],
 		"TSetupPermissionEntry":    SchemaRegistry[5500]["TSetupPermissionEntry"],
 		"TSetupTypeEntry":          SchemaRegistry[5500]["TSetupTypeEntry"],
 		"TSetupComponentEntry":     SchemaRegistry[5500]["TSetupComponentEntry"],
 		"TSetupTaskEntry":          SchemaRegistry[5500]["TSetupTaskEntry"],
 		"TSetupDirEntry":           SchemaRegistry[5500]["TSetupDirEntry"],
+		"TSetupISSigKeyEntry": {
+			NumWideStrings: 0,
+			NumAnsiStrings: 1,
+			FixedFields: []FieldSchema{
+				{"TotalKeyDataSize", FieldInt32, 4},
+			},
+		},
 		"TSetupFileEntry": {
 			NumWideStrings: 15,
 			NumAnsiStrings: 1,
@@ -1068,14 +1111,17 @@ func GetRecordSchema(ver int, recordName string, isUnicode bool) (RecordSchema, 
 		}
 
 		if recordName == "TSetupLanguageEntry" {
-			numWide := 10
-			numAnsi := 0
+			numWide := 6
+			numAnsi := 4
 			if ver < 4000 {
 				numWide = 2
+				numAnsi = 0
 			} else if ver < 4001 {
 				numWide = 7
+				numAnsi = 0
 			} else if ver >= 6600 {
-				numWide = 8
+				numWide = 4
+				numAnsi = 4
 			}
 
 			fields := []FieldSchema{}
@@ -1173,8 +1219,12 @@ func applyAnsiSchemaOverrides(schema RecordSchema, recordName string, ver int, i
 	copy(schema.FixedFields, oldFields)
 
 	if isUnicode {
-		// In a Unicode installer, ALL strings are WideStrings EXCEPT for TSetupHeader's ansi strings!
-		if recordName != "TSetupHeader" {
+		// In a Unicode installer, strings are WideStrings EXCEPT for records that preserve raw ANSI/binary data:
+		// - TSetupHeader: 4 ANSI strings (compiled script IFPS bytecode, etc.)
+		// - TSetupLanguageEntry: 4 ANSI strings (Data/Messages stream, License, InfoBefore, InfoAfter)
+		// - TSetupPermissionEntry: 1 ANSI string (Permissions)
+		// - TSetupISSigKeyEntry: 1 ANSI string (AllowedKeys)
+		if recordName != "TSetupHeader" && recordName != "TSetupLanguageEntry" && recordName != "TSetupPermissionEntry" && recordName != "TSetupISSigKeyEntry" {
 			schema.NumWideStrings = schema.NumWideStrings + schema.NumAnsiStrings
 			schema.NumAnsiStrings = 0
 		}
